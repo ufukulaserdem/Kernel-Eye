@@ -23,11 +23,13 @@ Python 3.6+
 Root privileges (required for kernel interaction).
 
 # For Fedora/RHEL
+```
 sudo dnf install bcc-tools python3-bcc python3-requests
-
+```
 # For Ubuntu/Debian
+```
 sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
-
+```
 2. Clone the Repo:
 ```bash
 git clone https://github.com/ufukulaserdem/Kernel-Eye
@@ -45,6 +47,7 @@ Run the agent with root privileges:
 ```bash
 sudo python3 kernel_eye.py
 ```
+
 ## 🛡️ Detection Logic (Examples)
 
 | Alert Type | Trigger Condition | Severity |
