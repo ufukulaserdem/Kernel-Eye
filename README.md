@@ -29,10 +29,11 @@ sudo dnf install bcc-tools python3-bcc python3-requests
 sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
 
 2. Clone the Repo:
+```bash
+git clone https://github.com/ufukulaserdem/Kernel-Eye
 
-git clone ...
 cd Kernel-Eye
-
+```
 3. Configuration:
 Open kernel_eye.py and set your Discord Webhook URL:
 
