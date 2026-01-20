@@ -30,7 +30,7 @@ sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
 
 2. Clone the Repo:
 
-git clone ...
+git clone https://github.com/ufukulaserdem/Kernel-Eye
 cd Kernel-Eye
 
 3. Configuration:
