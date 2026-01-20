@@ -6,70 +6,92 @@
 
 **Kernel-Eye** is a stealthy, kernel-level Endpoint Detection and Response (EDR) agent designed to monitor system calls directly from the source. By leveraging **eBPF (Extended Berkeley Packet Filter)**, it hooks into the Linux kernel to detect malicious activities that user-space antivirus tools might miss.
 
+It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
+
 ## 🚀 Features
 
-* **🕵️‍♂️ Process Monitoring:** Hooks into sys_enter_execve to detect suspicious commands, privilege escalation (Root), and shell spawning.
-* **📁 File Integrity Monitoring (FIM):** Hooks into sys_enter_openat to detect unauthorized modifications to critical system files (/etc/, /bin/, .bashrc).
-* **⚡ High Performance:** Uses in-kernel filtering (C) to drop benign noise (like zsh, git, node) before it reaches user space, ensuring minimal CPU overhead.
+* **🚫 Active Blocking (IPS):** Automatically terminates (SIGKILL) malicious processes like reverse shells or unauthorized file modifications instantly.
+* **🌐 Network Observability:** Hooks into `sys_enter_connect` to detect and report suspicious outbound connections (C2 traffic) to non-standard ports.
+* **🕵️‍♂️ Process Monitoring:** Hooks into `sys_enter_execve` to detect suspicious commands, privilege escalation (Root), and shell spawning.
+* **📁 File Integrity Monitoring (FIM):** Hooks into `sys_enter_openat` to detect unauthorized modifications to critical system files (`/etc/`, `/bin/`, `.bashrc`).
+* **⚡ High Performance:** Uses in-kernel filtering (C) to drop benign noise (like `zsh`, `git`, `node`) before it reaches user space, ensuring minimal CPU overhead.
 * **🔔 Real-Time Alerting:** Integrated with Discord Webhooks for instant security notifications.
-* **🛡️ Anti-Evasion:** Detects threats even if the attacker renames binary files (e.g., renaming curl to txt_reader).
 
 ## 🛠️ Installation
 
-1. Prerequisites:
-Linux Kernel 4.15+ (Supports eBPF)
-BCC (BPF Compiler Collection) tools installed.
-Python 3.6+
-Root privileges (required for kernel interaction).
+### 1. Prerequisites
+* Linux Kernel 4.15+ (Supports eBPF)
+* BCC (BPF Compiler Collection) tools installed.
+* Python 3.6+
+* Root privileges.
 
 # For Fedora/RHEL
-```
+```bash
 sudo dnf install bcc-tools python3-bcc python3-requests
 ```
 # For Ubuntu/Debian
-```
+```bash
 sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
 ```
-2. Clone the Repo:
-```bash
-git clone https://github.com/ufukulaserdem/Kernel-Eye
+2. Automatic Install (Recommended)
 
+This will set up the systemd service and configure the environment.
+```bash
+git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
 cd Kernel-Eye
+chmod +x install.sh
+sudo ./install.sh
 ```
-3. Configuration:
-Open kernel_eye.py and set your Discord Webhook URL:
+3. Configuration
 
-WEBHOOK_URL = "DISCORD_WEBHOOK_HERE"
-
-## 💻 Usage
-
-Run the agent with root privileges:
+After installation, you MUST add your Discord Webhook URL to the service file:
 ```bash
-sudo python3 kernel_eye.py
+sudo nano /etc/systemd/system/kernel-eye.service
+# Edit the line: Environment="DISCORD_WEBHOOK_URL=YOUR_URL_HERE"
 ```
+Then start the agent:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start kernel-eye
+sudo systemctl enable kernel-eye
+```
+🛡️ Detection Logic (Examples)
+Alert Type,Trigger Condition,Severity,Action
+C2_CONNECT,"Connection to known hacker ports (4444, 1337)",🔴 Critical,KILL
+PERSISTENCE,Modification of .bashrc or startup files,🔴 Critical,KILL
+CRITICAL,Access to /etc/shadow or /etc/passwd,🔴 High,KILL
+ROOT,Any process executed with UID 0 (via sudo/su),🟡 Medium,Log
+SHELL,Spawning bash or sh (Potential Reverse Shell),🟠 High,Log
+NETWORK,"Usage of curl, wget, nc (Data Exfiltration)",🔵 Low,Log
 
-## 🛡️ Detection Logic (Examples)
+🗺️ Roadmap
+✅ Completed
 
-| Alert Type | Trigger Condition | Severity |
-| :--- | :--- | :--- |
-| **ROOT** | Any process executed with UID 0 (via sudo/su) | 🟡 Medium |
-| **CRITICAL** | Access to /etc/shadow or /etc/passwd | 🔴 High |
-| **SHELL** | Spawning bash or sh (Potential Reverse Shell) | 🔴 High |
-| **NETWORK** | Usage of curl, wget, nc (Data Exfiltration) | 🔵 Low/Info |
-| **FILE_MOD** | Writing to /etc/* or .bashrc (Persistence) | 🟣 Critical |
+    [x] Process Execution Monitoring (sys_execve)
 
-## 🗺️ Roadmap
+    [x] File Integrity Monitoring (sys_openat)
 
-- [x] Process Execution Monitoring (execve)
-- [x] File Integrity Monitoring (openat)
-- [x] Discord Alerting & Rate Limiting
-- [x] **DONE** Network Socket Monitoring (connect)
-- [x] **DONE** Active Blocking (Kill process on detection)
+    [x] Network Socket Monitoring (sys_connect)
 
-## 🤝 Contributing
+    [x] Active Blocking (IPS Mode) - Kill switch implementation
+
+    [x] Systemd Service & Automated Installer
+
+    [x] Discord Alerting & Rate Limiting
+
+🚧 Phase 2: Advanced Warfare (In Progress)
+
+    [ ] Content Analysis (YARA): Deep packet/file inspection to detect malware signatures within files (not just filenames).
+
+    [ ] Forensic Database: Integration of a local SQLite database to store logs for historical analysis and auditing.
+
+    [ ] Heuristic Analysis: Parent-Child process tree analysis (e.g., detecting if Word spawns PowerShell).
+
+    [ ] Self-Protection: Preventing the agent itself from being killed by unauthorized users.
+    
+🤝 Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-
-## 📜 License
+📜 License
 
 MIT
