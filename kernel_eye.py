@@ -128,7 +128,7 @@ def send_discord_alert(alert_type, pid, uid, cmd, comm):
 
     payload = {
         "username": "Kernel-Eye",
-        "avatar_url": "eye.jpg",
+        "avatar_url": "https://raw.githubusercontent.com/ufukulaserdem/Kernel-Eye/main/eye.jpg",
         "embeds": [{
             "title": f"🚨 {alert_type}",
             "color": color_code,
