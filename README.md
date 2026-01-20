@@ -63,8 +63,8 @@ sudo python3 kernel_eye.py
 - [x] Process Execution Monitoring (execve)
 - [x] File Integrity Monitoring (openat)
 - [x] Discord Alerting & Rate Limiting
-- [ ] **Next:** Network Socket Monitoring (connect)
-- [x] **Next:** Active Blocking (Kill process on detection)
+- [x] **DONE** Network Socket Monitoring (connect)
+- [x] **DONE** Active Blocking (Kill process on detection)
 
 ## 🤝 Contributing
 
