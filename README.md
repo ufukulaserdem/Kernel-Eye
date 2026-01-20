@@ -57,15 +57,16 @@ sudo systemctl enable kernel-eye
 ```
 
 🛡️ Detection Logic (Examples)
-Alert Type	Trigger Condition	Severity	Action
-C2_CONNECT	Connection to known hacker ports (4444, 1337)	🔴 Critical	KILL
-PERSISTENCE	Modification of .bashrc or startup files	🔴 Critical	KILL
-CRITICAL	Access to /etc/shadow or /etc/passwd	🔴 High	KILL
-ROOT	Any process executed with UID 0 (via sudo/su)	🟡 Medium	Log
-SHELL	Spawning bash or sh (Potential Reverse Shell)	🟠 High	Log
-NETWORK	Usage of curl, wget, nc (Data Exfiltration)	🔵 Low	Log
+| Alert Type | Trigger Condition | Severity | Action |
+| :--- | :--- | :--- | :--- |
+| **C2_CONNECT** | Connection to known hacker ports (4444, 1337) | 🔴 Critical | **KILL** |
+| **PERSISTENCE** | Modification of `.bashrc` or startup files | 🔴 Critical | **KILL** |
+| **CRITICAL** | Access to `/etc/shadow` or `/etc/passwd` | 🔴 High | **KILL** |
+| **ROOT** | Any process executed with UID 0 (via sudo/su) | 🟡 Medium | Log |
+| **SHELL** | Spawning bash or sh (Potential Reverse Shell) | 🟠 High | Log |
+| **NETWORK** | Usage of `curl`, `wget`, `nc` (Data Exfiltration) | 🔵 Low | Log |
 
-🗺️ Roadmap
+## Roadmap
 ✅ Completed
 
     [x] Process Execution Monitoring (sys_execve)
