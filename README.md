@@ -8,6 +8,8 @@
 
 It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
 
+It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
+
 ## 🚀 Features
 
 * **🚫 Active Blocking (IPS):** Automatically terminates (SIGKILL) malicious processes like reverse shells or unauthorized file modifications instantly.
@@ -24,24 +26,45 @@ It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intru
 * BCC (BPF Compiler Collection) tools installed.
 * Python 3.6+
 * Root privileges.
+### 1. Prerequisites
+* Linux Kernel 4.15+ (Supports eBPF)
+* BCC (BPF Compiler Collection) tools installed.
+* Python 3.6+
+* Root privileges.
 
 # For Fedora/RHEL
+```bash
 ```bash
 sudo dnf install bcc-tools python3-bcc python3-requests
 ```
 # For Ubuntu/Debian
+```bash
 ```bash
 sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
 ```
 2. Automatic Install (Recommended)
 
 This will set up the systemd service and configure the environment.
+2. Automatic Install (Recommended)
+
+This will set up the systemd service and configure the environment.
 ```bash
+git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
 git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
 cd Kernel-Eye
 chmod +x install.sh
 sudo ./install.sh
+chmod +x install.sh
+sudo ./install.sh
 ```
+3. Configuration
+
+After installation, you MUST add your Discord Webhook URL to the service file:
+```bash
+sudo nano /etc/systemd/system/kernel-eye.service
+# Edit the line: Environment="DISCORD_WEBHOOK_URL=YOUR_URL_HERE"
+```
+Then start the agent:
 3. Configuration
 
 After installation, you MUST add your Discord Webhook URL to the service file:
@@ -54,8 +77,20 @@ Then start the agent:
 sudo systemctl daemon-reload
 sudo systemctl start kernel-eye
 sudo systemctl enable kernel-eye
+sudo systemctl daemon-reload
+sudo systemctl start kernel-eye
+sudo systemctl enable kernel-eye
 ```
 
+🛡️ Detection Logic (Examples)
+| Alert Type | Trigger Condition | Severity | Action |
+| :--- | :--- | :--- | :--- |
+| **C2_CONNECT** | Connection to known hacker ports (4444, 1337) | 🔴 Critical | **KILL** |
+| **PERSISTENCE** | Modification of `.bashrc` or startup files | 🔴 Critical | **KILL** |
+| **CRITICAL** | Access to `/etc/shadow` or `/etc/passwd` | 🔴 High | **KILL** |
+| **ROOT** | Any process executed with UID 0 (via sudo/su) | 🟡 Medium | Log |
+| **SHELL** | Spawning bash or sh (Potential Reverse Shell) | 🟠 High | Log |
+| **NETWORK** | Usage of `curl`, `wget`, `nc` (Data Exfiltration) | 🔵 Low | Log |
 🛡️ Detection Logic (Examples)
 | Alert Type | Trigger Condition | Severity | Action |
 | :--- | :--- | :--- | :--- |
@@ -85,6 +120,7 @@ sudo systemctl enable kernel-eye
 🤝 Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+📜 License
 📜 License
 
 MIT
