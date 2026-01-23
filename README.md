@@ -12,7 +12,7 @@ It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intru
 
 > **Scenario:** An attacker tries to execute a reverse shell. Kernel-Eye detects the syscalls instantly, kills the process, and pushes a Discord alert.
 
-![Kernel-Eye Demo](kernel_eye.gif)
+![Kernel-Eye Demo](kernel_eye.webm)
 
 ## 🚀 Features
 
