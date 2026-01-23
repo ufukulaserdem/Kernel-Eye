@@ -8,7 +8,11 @@
 
 It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
 
-It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
+## 📺 Demo in Action
+
+> **Scenario:** An attacker tries to execute a reverse shell. Kernel-Eye detects the syscalls instantly, kills the process, and pushes a Discord alert.
+
+![Kernel-Eye Demo](kernel_eye.gif)
 
 ## 🚀 Features
 
@@ -26,72 +30,40 @@ It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intru
 * BCC (BPF Compiler Collection) tools installed.
 * Python 3.6+
 * Root privileges.
-### 1. Prerequisites
-* Linux Kernel 4.15+ (Supports eBPF)
-* BCC (BPF Compiler Collection) tools installed.
-* Python 3.6+
-* Root privileges.
 
-# For Fedora/RHEL
-```bash
+### **For Fedora/RHEL**
 ```bash
 sudo dnf install bcc-tools python3-bcc python3-requests
 ```
-# For Ubuntu/Debian
-```bash
+### **For Ubuntu/Debian**
 ```bash
 sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
 ```
-2. Automatic Install (Recommended)
-
-This will set up the systemd service and configure the environment.
-2. Automatic Install (Recommended)
+## 2. Automatic Install (Recommended)
 
 This will set up the systemd service and configure the environment.
 ```bash
-git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
-git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
+git clone https://github.com/ufukulaserdem/Kernel-Eye.git
 cd Kernel-Eye
 chmod +x install.sh
 sudo ./install.sh
-chmod +x install.sh
-sudo ./install.sh
 ```
-3. Configuration
+
+## 3. Configuration
 
 After installation, you MUST add your Discord Webhook URL to the service file:
 ```bash
 sudo nano /etc/systemd/system/kernel-eye.service
-# Edit the line: Environment="DISCORD_WEBHOOK_URL=YOUR_URL_HERE"
-```
-Then start the agent:
-3. Configuration
-
-After installation, you MUST add your Discord Webhook URL to the service file:
-```bash
-sudo nano /etc/systemd/system/kernel-eye.service
-# Edit the line: Environment="DISCORD_WEBHOOK_URL=YOUR_URL_HERE"
+# Edit the line: Environment="DISCORD_WEBHOOK_URL"
 ```
 Then start the agent:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl start kernel-eye
 sudo systemctl enable kernel-eye
-sudo systemctl daemon-reload
-sudo systemctl start kernel-eye
-sudo systemctl enable kernel-eye
 ```
 
-🛡️ Detection Logic (Examples)
-| Alert Type | Trigger Condition | Severity | Action |
-| :--- | :--- | :--- | :--- |
-| **C2_CONNECT** | Connection to known hacker ports (4444, 1337) | 🔴 Critical | **KILL** |
-| **PERSISTENCE** | Modification of `.bashrc` or startup files | 🔴 Critical | **KILL** |
-| **CRITICAL** | Access to `/etc/shadow` or `/etc/passwd` | 🔴 High | **KILL** |
-| **ROOT** | Any process executed with UID 0 (via sudo/su) | 🟡 Medium | Log |
-| **SHELL** | Spawning bash or sh (Potential Reverse Shell) | 🟠 High | Log |
-| **NETWORK** | Usage of `curl`, `wget`, `nc` (Data Exfiltration) | 🔵 Low | Log |
-🛡️ Detection Logic (Examples)
+## 🛡️ Detection Logic (Examples)
 | Alert Type | Trigger Condition | Severity | Action |
 | :--- | :--- | :--- | :--- |
 | **C2_CONNECT** | Connection to known hacker ports (4444, 1337) | 🔴 Critical | **KILL** |
@@ -117,10 +89,16 @@ sudo systemctl enable kernel-eye
 - [ ] **Heuristic Analysis:** Parent-Child process tree analysis (e.g., detecting if Word spawns PowerShell).
 - [ ] **Self-Protection:** Preventing the agent itself from being killed by unauthorized users.
     
-🤝 Contributing
+## 🤝 Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-📜 License
-📜 License
+
+## 👨‍💻 Author & Contact
+**Ufuk Ulaş Erdem** - CS Student & Linux Enthusiast
+* 💼 **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
+* 📧 **Email:** mainufukulaserdem@gmail.com
+* 🎯 **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
+
+## 📜 License
 
 MIT
