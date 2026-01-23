@@ -1,4 +1,7 @@
 #!/usr/bin/python3
+# Kernel-Eye: eBPF-based Advanced EDR for Linux
+# Github: https://github.com/ufukulaserdem/Kernel-Eye
+
 from bcc import BPF
 import ctypes
 import requests
@@ -9,19 +12,17 @@ import time
 import socket
 import struct
 import os
-import signal # YENI: Process oldurmek icin sinyal kutuphanesi
+import signal 
 
-# --- KONFIGURASYON ---
-# Terminalden: sudo DISCORD_WEBHOOK_URL="..." python3 kernel_eye.py
+# --- CONFIGURATION ---
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
-# --- ACTIVE RESPONSE (ENGELLEME) AYARI ---
-# Eger True ise, kirmizi alarmlarda islemi oldurur.
-BLOCKING_MODE = True 
-
+# --- ACTIVE RESPONSE SETTINGS ---
+BLOCKING_MODE = True  # If True, it kills malicious processes immediately
 RATE_LIMIT_SECONDS = 60 
 alert_history = {} 
 
+# --- COLORS ---
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -30,7 +31,7 @@ MAGENTA = "\033[95m"
 RESET = "\033[0m"
 
 # =============================================================
-# KERNEL SPACE (C CODE) - Ayni kaliyor
+# KERNEL SPACE (C CODE)
 # =============================================================
 
 bpf_source_code = """
@@ -58,6 +59,7 @@ struct data_t {
 
 BPF_PERF_OUTPUT(events);
 
+// Hook: Process Execution
 TRACEPOINT_PROBE(syscalls, sys_enter_execve)
 {
     struct data_t data = {};
@@ -65,18 +67,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve)
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), args->filename);
 
+    // Basic Noise Filtering in Kernel Space (Optimization)
     char *f = data.fname;
     if (f[5] == 'l' && f[6] == 'i' && f[7] == 'b') return 0; 
-    if (f[1] == 'u' && f[2] == 's' && f[3] == 'r') {
-        if (f[9] == 'b') { if (f[12] == 'e') return 0; } 
-        if (f[9] == 'f') return 0; 
-        if (f[9] == 'g') return 0; 
-        if (f[9] == 's') return 0; 
-        if (f[9] == 'm') return 0; 
-        if (f[9] == 't') return 0; 
-        if (f[9] == 'd') return 0; 
-        if (f[9] == 'c') { if (f[10] != 'u') return 0; } 
-    }
     
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.uid = bpf_get_current_uid_gid();
@@ -89,8 +82,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve)
     return 0;
 }
 
+// Hook: File Access
 TRACEPOINT_PROBE(syscalls, sys_enter_openat)
 {
+    // Filter: Only trigger on WRITE/CREATE/TRUNC flags
     int is_write = 0;
     if ((args->flags & O_WRONLY) || (args->flags & O_RDWR) || 
         (args->flags & O_CREAT)  || (args->flags & O_TRUNC)) {
@@ -105,18 +100,17 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat)
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.fname, sizeof(data.fname), args->filename);
 
+    // Basic Path Filtering
     char *n = data.fname;
-    if (n[0] == '/' && n[1] == 'p') return 0; 
-    if (n[0] == '/' && n[1] == 's') return 0; 
-    if (n[0] == '/' && n[1] == 'd') return 0; 
-    if (n[0] == '/' && n[1] == 'r') return 0; 
-    if (n[0] == '/' && n[1] == 't') return 0; 
-    if (n[0] == '/' && n[1] == 'v' && n[2] == 'a') return 0; 
+    if (n[0] == '/' && n[1] == 'p') return 0; // /proc
+    if (n[0] == '/' && n[1] == 's') return 0; // /sys
+    if (n[0] == '/' && n[1] == 'd') return 0; // /dev
 
     events.perf_submit(args, &data, sizeof(data));
     return 0;
 }
 
+// Hook: Network Connection
 TRACEPOINT_PROBE(syscalls, sys_enter_connect)
 {
     struct data_t data = {};
@@ -143,18 +137,11 @@ TRACEPOINT_PROBE(syscalls, sys_enter_connect)
 # =============================================================
 
 def kill_process(pid, comm):
-    """
-    Tehlikeli islemi aninda sonlandirir (SIGKILL).
-    """
     if not BLOCKING_MODE: return False
     try:
         os.kill(pid, signal.SIGKILL)
         return True
-    except ProcessLookupError:
-        return False # Islem zaten bitmis
-    except Exception as e:
-        print(f"{RED}Error killing process {pid}: {e}{RESET}")
-        return False
+    except: return False
 
 def check_rate_limit(alert_signature):
     now = time.time()
@@ -171,12 +158,10 @@ def send_discord_alert(alert_type, pid, uid, details, comm, killed):
     if not check_rate_limit(signature): return
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    color_code = 3447003 
-    if alert_type == "ROOT" or alert_type == "NET_SUSPICIOUS": color_code = 16776960 
-    if alert_type == "CRITICAL" or alert_type == "C2_CONNECT": color_code = 16711680 
+    color_code = 3447003 # Blue
+    if alert_type == "ROOT" or alert_type == "NET_SUSPICIOUS": color_code = 16776960 # Yellow
+    if alert_type == "CRITICAL" or alert_type == "C2_CONNECT": color_code = 16711680 # Red
 
-    # Eger process oldurulduyse basliga ekle
     title_suffix = "🚫 [BLOCKED]" if killed else ""
 
     payload = {
@@ -193,22 +178,26 @@ def send_discord_alert(alert_type, pid, uid, details, comm, killed):
             ]
         }]
     }
-    try:
-        requests.post(WEBHOOK_URL, json=payload, timeout=2)
+    try: requests.post(WEBHOOK_URL, json=payload, timeout=2)
     except: pass
 
-print(f"{CYAN}[+] Kernel-Eye v6.0: ACTIVE BLOCKING MODE ENABLED!{RESET}")
+print(f"{CYAN}[+] Kernel-Eye v1.0: ACTIVE DEFENSE SYSTEM ONLINE...{RESET}")
 try:
     b = BPF(text=bpf_source_code)
 except Exception as e:
     print(f"{RED}Error: {e}{RESET}"); exit()
 
-print(f"{'TYPE':<10} {'PID':<8} {'UID':<6} {'DETAILS'}")
-print(f"{'='*60}")
+# --- HEADER ---
+print(f"{'='*80}")
+print(f"║ {'ALERT TYPE':<14} ║ {'PID':<6} ║ {'DETAILS':<51}")
+print(f"{'='*80}")
 
+# --- GLOBAL WHITELIST (Reduce False Positives) ---
+# Common desktop apps and system processes to ignore
 WHITELIST = [
     "code", "discord", "firefox", "spotify", "chrome", "slack", "idea",
-    ".cache", ".config", ".git", "node_modules", "cpuUsage.sh"
+    ".cache", ".config", ".git", "node_modules", "cpuUsage.sh", "kworker",
+    "goutputstream", "gnome", "kde", "systemd", "journal"
 ]
 
 def ip_to_str(addr_int):
@@ -227,56 +216,68 @@ def print_event(cpu, data, size):
     alert_type = "INFO"
     color = RESET
     send_to_discord = False
-    should_kill = False # Oldurme karari
+    should_kill = False
     details = ""
 
-    # --- PROCESS ---
+    # --- PROCESS MONITORING ---
     if event.type == 1:
         arg1 = event.arg1.decode('utf-8', 'ignore')
         details = f"EXEC: {fname} {arg1}"
-        if event.uid == 0:
+
+        # 1. CRITICAL: Access to Shadow/Passwd
+        if "shadow" in arg1 or "passwd" in arg1:
+            alert_type = "CRITICAL"; color = RED; send_to_discord = True; should_kill = True 
+        
+        # 2. WARNING: Root Activity
+        elif event.uid == 0:
             alert_type = "ROOT"; color = YELLOW; send_to_discord = True
-        elif "shadow" in arg1 or "passwd" in arg1:
-            alert_type = "CRITICAL"; color = RED; send_to_discord = True; should_kill = True # <--- OLDUR
+        
+        # 3. SUSPICIOUS: Shell Spawning (Reverse Shell Potential)
         elif ("bash" in fname or "sh" in fname) and event.uid != 0:
-             if "zsh" not in fname:
+             if "zsh" not in fname: # Exclude user's default shell if needed
                 alert_type = "SHELL"; color = RED; send_to_discord = False
 
-    # --- FILE ---
+    # --- FILE INTEGRITY MONITORING (FIM) ---
     elif event.type == 2:
         details = f"MODIFIED: {fname}"
         if fname.startswith("/etc/") or fname.startswith("/boot/"):
             alert_type = "FILE_MOD"; color = MAGENTA; send_to_discord = True
         elif fname.endswith(".bashrc"):
-            alert_type = "PERSISTENCE"; color = RED; send_to_discord = True; should_kill = True # <--- OLDUR
+            alert_type = "PERSISTENCE"; color = RED; send_to_discord = True; should_kill = True 
         else:
             alert_type = "FILE"; color = RESET; send_to_discord = False
 
-    # --- NETWORK ---
+    # --- NETWORK MONITORING ---
     elif event.type == 3:
         ip = ip_to_str(event.daddr)
         port = socket.ntohs(event.dport)
         details = f"CONNECT: {ip}:{port}"
+        
         if ip.startswith("127.0."): return
         
+        # Filter standard traffic (HTTPS/DNS/NTP) to reduce noise
+        if port == 443 or port == 53 or port == 123 or port == 0: return 
+
+        # Detect Known Hacker Ports
         if port == 4444 or port == 1337 or port == 6667: 
-            alert_type = "C2_CONNECT"; color = RED; send_to_discord = True; should_kill = True # <--- OLDUR
-        elif port != 80 and port != 443 and port != 53: 
+            alert_type = "C2_CONNECT"; color = RED; send_to_discord = True; should_kill = True 
+        elif port != 80: 
             alert_type = "NET_SUSPICIOUS"; color = YELLOW; send_to_discord = True
         else:
             alert_type = "NETWORK"; color = CYAN; send_to_discord = False
 
     if alert_type == "INFO": return
     
-    # KILL SWITCH
+    # KILL SWITCH LOGIC
     killed = False
     if should_kill:
         killed = kill_process(event.pid, comm)
         if killed:
-            details += " [KILLED]"
+            details += " [🚫 BLOCK]" 
             color = RED
 
-    print(f"{color}{alert_type:<10} {event.pid:<8} {event.uid:<6} {details}{RESET}")
+    # --- OUTPUT ---
+    print(f"{color}║ {alert_type:<14} ║ PID: {event.pid:<6} ║ {details}{RESET}")
 
     if send_to_discord:
         t = threading.Thread(target=send_discord_alert, args=(alert_type, event.pid, event.uid, details, comm, killed))
