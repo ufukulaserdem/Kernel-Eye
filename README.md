@@ -21,7 +21,7 @@ It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intru
 * **Zero-Trust (Fileless Detection):** Monitors `sys_enter_memfd_create` to detect and log fileless malware execution attempts residing purely in RAM.
 * **Active Blocking (IPS):** Automatically terminates (SIGKILL) processes attempting to access critical files like `/etc/shadow`.
 * **SIEM-Ready Logging:** Outputs structured, industry-standard JSON logs to `/var/log/kernel-eye.json`, ready for ingestion by Splunk, ELK, or Wazuh.
-* **High Performance:** Powered by eBPF (CO-RE principles applied via BCC) for minimal system overhead.
+* **High Performance:** Powered by eBPF via BCC for minimal system overhead and deep kernel visibility.
 
 ## Installation
 
@@ -46,7 +46,7 @@ sudo apt-get install bpfcc-tools python3-bpfcc
 This will set up the systemd service and configure the environment.
 
 ```bash
-git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
+git clone https://github.com/ufukulaserdem/Kernel-Eye.git
 cd Kernel-Eye
 chmod +x install.sh
 sudo ./install.sh
