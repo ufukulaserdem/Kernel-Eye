@@ -4,19 +4,28 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-if [ "$EUID" -ne 0 ]
-  then echo -e "${RED}[!] Please run as root (sudo ./install.sh)${NC}"
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[!] Please run as root (sudo ./install.sh)${NC}"
   exit
 fi
 
-echo -e "${GREEN}[+] Installing Kernel-Eye...${NC}"
-
-mkdir -p /opt/kernel-eye
-cp kernel_eye.py /opt/kernel-eye/
-cp eye.jpg /opt/kernel-eye/ 2>/dev/null
-
+echo -e "${GREEN}[+] Installing Kernel-Eye Security Agent...${NC}"
+echo -e "[*] Copying binary to /usr/local/bin..."
+cp kernel_eye.py /usr/local/bin/kernel_eye.py
+chmod +x /usr/local/bin/kernel_eye.py
+echo -e "[*] Configuring secure logging..."
+touch /var/log/kernel-eye.json
+chmod 600 /var/log/kernel-eye.json
+echo -e "[*] Installing systemd service..."
 cp kernel-eye.service /etc/systemd/system/
+systemctl daemon-reload
+echo -e "[*] Starting Kernel-Eye..."
+systemctl enable kernel-eye
+systemctl restart kernel-eye
 
-echo -e "${GREEN}[+] Files copied to /opt/kernel-eye${NC}"
-echo -e "${RED}[!] IMPORTANT: Please edit /etc/systemd/system/kernel-eye.service and add your DISCORD WEBHOOK URL!${NC}"
-echo -e "${GREEN}[+] Then run: sudo systemctl daemon-reload && sudo systemctl start kernel-eye${NC}"
+if systemctl is-active --quiet kernel-eye; then
+    echo -e "${GREEN}[SUCCESS] Kernel-Eye is running and protected!${NC}"
+    echo -e "Logs: tail -f /var/log/kernel-eye.json"
+else
+    echo -e "${RED}[ERROR] Failed to start service. Check logs: journalctl -u kernel-eye${NC}"
+fi

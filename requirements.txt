@@ -1,1 +1,6 @@
-requests
+# No PyPI packages required.
+# This project uses the 'bcc' library, which acts as a wrapper for C/eBPF.
+# It MUST be installed via system package manager as it depends on kernel headers.
+#
+# Ubuntu/Debian: sudo apt install python3-bpfcc
+# Fedora/RHEL:   sudo dnf install python3-bcc

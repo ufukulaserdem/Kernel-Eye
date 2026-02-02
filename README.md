@@ -1,4 +1,4 @@
-# 👁️ Kernel-Eye: eBPF-Based Linux Threat Detection
+# Kernel-Eye: eBPF-Based Linux Threat Detection
 
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
@@ -8,97 +8,101 @@
 
 It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
 
-## 📺 Demo in Action
+## Demo in Action
 
-> **Scenario:** An attacker tries to execute a reverse shell. Kernel-Eye detects the syscalls instantly, kills the process, and pushes a Discord alert.
+> **Scenario:** An attacker tries to execute a reverse shell or kill the agent using `kill -9`. Kernel-Eye blocks the termination attempt (Self-Protection), kills the malicious process, and generates a structured JSON log for SIEM analysis.
 
 [kernel_eye.webm](https://github.com/user-attachments/assets/40bf9b8d-ed08-4ac5-9c83-4aebcfba08c8)
 
-## 🚀 Features
+## Features
 
-* **🚫 Active Blocking (IPS):** Automatically terminates (SIGKILL) malicious processes like reverse shells or unauthorized file modifications instantly.
-* **🌐 Network Observability:** Hooks into `sys_enter_connect` to detect and report suspicious outbound connections (C2 traffic) to non-standard ports.
-* **🕵️‍♂️ Process Monitoring:** Hooks into `sys_enter_execve` to detect suspicious commands, privilege escalation (Root), and shell spawning.
-* **📁 File Integrity Monitoring (FIM):** Hooks into `sys_enter_openat` to detect unauthorized modifications to critical system files (`/etc/`, `/bin/`, `.bashrc`).
-* **⚡ High Performance:** Uses in-kernel filtering (C) and BPF Ring Buffers to drop benign noise (like `zsh`, `git`, `node`) before it reaches user space, ensuring minimal CPU overhead.
-* **🔔 Real-Time Alerting:** Integrated with Discord Webhooks for instant security notifications.
+* **Immortal Mode (Anti-Tamper):** Uses **LSM (Linux Security Modules)** hooks (`task_kill`) to prevent the agent from being killed, even by the root user.
+* **Anti-Spoofing (Path Validation):** Detects process masquerading (e.g., malware naming itself `code` or `systemd` but running from `/tmp`). It validates that trusted names only run from immutable system paths.
+* **Zero-Trust (Fileless Detection):** Monitors `sys_enter_memfd_create` to detect and log fileless malware execution attempts residing purely in RAM.
+* **Active Blocking (IPS):** Automatically terminates (SIGKILL) processes attempting to access critical files like `/etc/shadow`.
+* **SIEM-Ready Logging:** Outputs structured, industry-standard JSON logs to `/var/log/kernel-eye.json`, ready for ingestion by Splunk, ELK, or Wazuh.
+* **High Performance:** Powered by eBPF (CO-RE principles applied via BCC) for minimal system overhead.
 
-## 🛠️ Installation
+## Installation
 
 ### 1. Prerequisites
-* Linux Kernel 4.15+ (Supports eBPF)
-* BCC (BPF Compiler Collection) tools installed.
-* Python 3.6+
+* Linux Kernel 5.7+ (Required for LSM / Self-Protection features).
+* BCC (BPF Compiler Collection) tools.
+* Python 3.8+
 * Root privileges.
 
 ### **For Fedora/RHEL**
 ```bash
-sudo dnf install bcc-tools python3-bcc python3-requests
+sudo dnf install bcc-tools python3-bcc
 ```
+
 ### **For Ubuntu/Debian**
 ```bash
-sudo apt-get install bpfcc-tools python3-bpfcc python3-requests
+sudo apt-get install bpfcc-tools python3-bpfcc
 ```
+
 ## 2. Automatic Install (Recommended)
 
 This will set up the systemd service and configure the environment.
+
 ```bash
-git clone https://github.com/ufukulaserdem/Kernel-Eye.git
+git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
 cd Kernel-Eye
 chmod +x install.sh
 sudo ./install.sh
 ```
 
-## 3. Configuration
+## 3. Configuration & Monitoring
+Kernel-Eye runs as a systemd service and logs events locally.
 
-After installation, you MUST add your Discord Webhook URL to the service file:
+**Check Service Status:**
 ```bash
-sudo nano /etc/systemd/system/kernel-eye.service
-# Edit the line: Environment="DISCORD_WEBHOOK_URL"
+sudo systemctl status kernel-eye
 ```
-Then start the agent:
+**View Live Security Logs:**
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl start kernel-eye
-sudo systemctl enable kernel-eye
+tail -f /var/log/kernel-eye.json
 ```
+**Log Format Example:**
+```JSON
+{"timestamp": "2026-02-02T19:30:00", "severity": "CRITICAL", "event_type": "SECURITY_TAMPERING", "action": "BLOCKED", ...}
+```
+## Detection Logic
 
-## 🛡️ Detection Logic (Examples)
+The following table outlines the enforcement rules applied by the eBPF agent in kernel space:
+
 | Alert Type | Trigger Condition | Severity | Action |
 | :--- | :--- | :--- | :--- |
-| **C2_CONNECT** | Connection to known hacker ports (4444, 1337) | 🔴 Critical | **KILL** |
-| **PERSISTENCE** | Modification of `.bashrc` or startup files | 🔴 Critical | **KILL** |
-| **CRITICAL** | Access to `/etc/shadow` or `/etc/passwd` | 🔴 High | **KILL** |
-| **ROOT** | Any process executed with UID 0 (via sudo/su) | 🟡 Medium | Log |
-| **SHELL** | Spawning bash or sh (Potential Reverse Shell) | 🟠 High | Log |
-| **NETWORK** | Usage of `curl`, `wget`, `nc` (Data Exfiltration) | 🔵 Low | Log |
+| **SELF_PROT** | Attempt to send lethal signal (9/15) to the Agent | 🔴 Critical | **BLOCK & LOG** |
+| **CRITICAL** | Unauthorized access to `/etc/shadow` | 🔴 Critical | **KILL PROCESS** |
+| **FILELESS** | Usage of `memfd_create` (Malware running in RAM) | 🟠 High | Log / Detect |
+| **SPOOFING** | Trusted binary name (e.g., `code`) executing from non-system path (`/tmp`, `/home`) | 🟠 High | Log / Detect |
+| **ROOT** | Unexpected process execution with UID 0 | 🟡 Medium | Log |
 
-## 🗺️ Roadmap
+## Roadmap
 
-### ✅ Phase 1: Completed
-- [x] Process Execution Monitoring (sys_execve)
-- [x] File Integrity Monitoring (sys_openat)
-- [x] Network Socket Monitoring (sys_connect)
-- [x] Active Blocking (IPS Mode) - Kill switch implementation
-- [x] Systemd Service & Automated Installer
-- [x] Discord Alerting & Rate Limiting
+### Completed Capabilities
+- [x] **Anti-Tamper:** LSM Hook implementation for self-protection.
+- [x] **Context Awareness:** Parent-Child process tree analysis (`bash` -> `python` -> `malware`).
+- [x] **Anti-Spoofing:** Binary path verification vs. process name.
+- [x] **Fileless Defense:** Memory file descriptor monitoring.
+- [x] **SIEM Integration:** JSON Structured Logging.
 
-### 🚧 Phase 2: Advanced Capabilities (In Progress)
-- [ ] **Content Analysis (YARA):** Deep packet/file inspection to detect malware signatures.
-- [ ] **Forensic Database:** Local SQLite database to store logs for auditing.
-- [ ] **Heuristic Analysis:** Parent-Child process tree analysis (e.g., detecting if Word spawns PowerShell).
-- [ ] **Self-Protection:** Preventing the agent itself from being killed by unauthorized users.
+### Future Work
+- [ ] **CO-RE Migration:** Porting from BCC (Python) to libbpf (C) for dependency-free deployment.
+- [ ] **YARA Integration:** Scanning file content upon `openat`.
+- [ ] **Network Module:** Re-implementing eBPF socket filters for C2 detection.
     
-## 🤝 Contributing
+## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
-## 👨‍💻 Author & Contact
+## Author & Contact
 **Ufuk Ulaş Erdem** - CS Student & Linux Enthusiast
-* 💼 **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
-* 📧 **Email:** mainufukulaserdem@gmail.com
-* 🎯 **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
+* **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
+* **Email:** mainufukulaserdem@gmail.com
+* **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
 
-## 📜 License
+## License
 
 MIT

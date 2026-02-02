@@ -1,5 +1,25 @@
+# Python artifacts
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Logs
 *.log
-.env
+*.json
+
+# System specific files
+.DS_Store
+.directory
+Thumbs.db
+
+# IDE specific files
 .vscode/
+.idea/
+
+# Swap files (Vim/Nano)
+*.swp
+*~
+
+# Virtual Environment
+venv/
+env/

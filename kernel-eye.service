@@ -1,16 +1,15 @@
 [Unit]
-Description=Kernel-Eye EDR Agent (eBPF Security Monitor)
-After=network.target
+Description=Kernel-Eye Security Agent (eBPF)
+After=network.target auditd.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/kernel-eye
-# WARNING: Replace this with your actual Webhook URL before installing!
-Environment="DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
-ExecStart=/usr/bin/python3 /opt/kernel-eye/kernel_eye.py
+ExecStart=/usr/bin/python3 /usr/local/bin/kernel_eye.py
 Restart=always
-RestartSec=5
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
