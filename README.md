@@ -98,7 +98,7 @@ The following table outlines the enforcement rules applied by the eBPF agent in 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
 ## Author & Contact
-**Ufuk Ulaş Erdem** - CS Student & Linux Enthusiast
+**Ufuk Ulaş Erdem** - CS Student & System Security Researcher
 * **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
 * **Email:** mainufukulaserdem@gmail.com
 * **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
