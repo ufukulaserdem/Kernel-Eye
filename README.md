@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Security](https://img.shields.io/badge/Security-eBPF-red?style=for-the-badge)
 
-**Kernel-Eye** is a stealthy, kernel-level Endpoint Detection and Response (EDR) agent designed to monitor system calls directly from the source. By leveraging **eBPF (Extended Berkeley Packet Filter)**, it hooks into the Linux kernel to detect malicious activities that user-space antivirus tools might miss.
+**Kernel-Eye** is a stealthy, kernel-level Endpoint Detection and Response (EDR) agent designed to monitor system calls directly from the source. By leveraging **eBPF (Extended Berkeley Packet Filter)**, it hooks into the Linux kernel to detect malicious activities that user-space antivirus tools might miss, making it ideal for Cloud Workload Protection (CWPP) scenarios.
 
 It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
 
@@ -99,7 +99,7 @@ The following table outlines the **Active Enforcement Rules** applied by the Ker
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
 ## Author & Contact
-**Ufuk Ulaş Erdem** - CS Student & Linux Enthusiast
+**Ufuk Ulaş Erdem** - CS Student & System Security Researcher
 * **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
 * **Email:** mainufukulaserdem@gmail.com
 * **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
