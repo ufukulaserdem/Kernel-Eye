@@ -1,274 +1,310 @@
 #!/usr/bin/python3
-# Kernel-Eye: eBPF-based Linux Security Agent
-# Capabilities: Anti-Tamper (LSM), Anti-Spoofing, Zero-Trust, JSON Logging
-# Author: Ufuk Ulas Erdem
-# License: MIT
+# -*- coding: utf-8 -*-
 
-from bcc import BPF
-import ctypes
+"""
+Kernel-Eye: eBPF-Based Linux Threat Detection & Response Agent.
+Author: Ufuk Ulas Erdem
+License: MIT
+Description:
+    Real-time kernel-level EDR agent utilizing eBPF/LSM hooks for 
+    process monitoring, fileless threat detection, and active intrusion prevention.
+"""
+
+import sys
 import os
 import json
-import logging
+import signal
 import datetime
-import socket
-import sys
-import time
+import ctypes
+from bcc import BPF
 
-# --- CONSTANTS ---
-TYPE_EXEC = 1
-TYPE_ZERO_MEMFD = 10
-TYPE_SELF_PROT = 99
-EPERM = 1
+# ==============================================================================
+# CONFIGURATION & CONSTANTS
+# ==============================================================================
 
-# --- LOGGING CONFIGURATION ---
-LOG_FILE = "/var/log/kernel-eye.json"
-logger = logging.getLogger("KernelEye")
-logger.setLevel(logging.INFO)
-handler = logging.FileHandler(LOG_FILE)
-formatter = logging.Formatter('%(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+LOG_FILE_PATH = "/var/log/kernel-eye.json"
 
-# --- TRUSTED PROCESS NAMES (WHITELIST) ---
-TRUSTED_COMMS = [
-    "Xwayland", "code", "kwin_wayland", "systemd", "baloo_file",
-    "ghostty", "zen", "flatpak", "cpuUsage.sh", "gitstatusd",
-    "fnm", "brew", "zsh", "bash", "sh", "pipewire", "wireplumber",
-    "kworker", "node", "python3"
+# UI Color Definitions
+C_RESET   = "\033[0m"
+C_RED     = "\033[91m"
+C_GREEN   = "\033[92m"
+C_YELLOW  = "\033[93m"
+C_BLUE    = "\033[94m"
+C_MAGENTA = "\033[95m"
+C_CYAN    = "\033[96m"
+C_BOLD    = "\033[1m"
+
+EVENT_TYPES = {
+    1: "EXEC",
+    2: "FILE",
+    4: "MEMFD",
+    99: "TAMPER"
+}
+
+# Critical System Paths (Zero-Trust Policy)
+# REMOVED: /etc/passwd (Must be world-readable for system stability)
+PROTECTED_PATHS = [
+    b"/etc/shadow",
+    b"/etc/sudoers",
+    b"/root/.ssh/authorized_keys"
 ]
 
-bpf_source = """
+# --- WHITELIST CONFIGURATION ---
+WHITELIST_PROCESSES = [
+    # System Services
+    b"systemd", b"dbus-daemon", b"polkitd", b"rtkit-daemon", b"sshd", 
+    b"login", b"sudo", b"kworker", b"unix_chkpwd",
+    b"systemd-userwor", b"systemd-userwork", b"(sd-worker)",
+    b"accounts-daemon", b"quota",
+    
+    # Desktop Integration (Prevents browser/GUI crashes)
+    b"xdg-desktop-por", b"xdg-desktop-portal", b"flatpak",
+    b"gnome-shell", b"plasmashell", b"kwin_wayland", b"Xorg",
+    
+    # Audio & Multimedia
+    b"pipewire", b"pipewire-pulse", b"wireplumber", b"spotify",
+    
+    # Development Tools & Browsers
+    b"code", b"zen", b"ghostty", b"chrome", b"firefox", b"brave", 
+    b"git",
+    
+    # Interpreters
+    b"bash", b"zsh", b"sh", b"python3", b"node"
+]
+
+# ==============================================================================
+# eBPF KERNEL PROGRAM (C SOURCE)
+# ==============================================================================
+
+BPF_PROGRAM_SOURCE = r"""
+#include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
-#include <linux/bpf.h>
 
-#define TYPE_EXEC        1
-#define TYPE_ZERO_MEMFD  10
-#define TYPE_SELF_PROT   99
-#define EPERM            1
+#define MAX_PATH_LEN 256
+#define EPERM 1
 
 struct data_t {
-    u32 type;
     u32 pid;
-    u32 ppid;
     u32 uid;
-    int sig; // Signal number (e.g. 9 for SIGKILL)
+    u32 type;
     char comm[16];
-    char pcomm[16];
-    char fname[128];
-    u32 killed;
-};
-
-// Struct to fix BCC macro expansion issue with char arrays
-struct proc_key_t {
-    char name[16];
+    char filename[MAX_PATH_LEN];
 };
 
 BPF_PERF_OUTPUT(events);
-BPF_HASH(whitelist_map, u32, u32);
-BPF_HASH(trusted_comms, struct proc_key_t, u32);
-BPF_ARRAY(protected_pid, u32, 1); // Stores Agent's own PID
+BPF_ARRAY(protected_pid, u32, 1); 
 
-// --- SELF-PROTECTION (LSM HOOK) ---
-// Hook: Triggered before a signal is delivered to a process
+// HOOK 1: Process Execution
+int syscall__execve(struct pt_regs *ctx, const char __user *filename) {
+    struct data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.uid = bpf_get_current_uid_gid();
+    data.type = 1; 
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_user_str(&data.filename, sizeof(data.filename), filename);
+    
+    events.perf_submit(ctx, &data, sizeof(data));
+    return 0;
+}
+
+// HOOK 2: File Access
+int syscall__openat(struct pt_regs *ctx, int dfd, const char __user *filename, int flags) {
+    struct data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.uid = bpf_get_current_uid_gid();
+    data.type = 2; 
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_user_str(&data.filename, sizeof(data.filename), filename);
+
+    if ((data.filename[0] == '/' && data.filename[1] == 'e' && data.filename[2] == 't' && data.filename[3] == 'c') ||
+        (data.filename[0] == '/' && data.filename[1] == 'r' && data.filename[2] == 'o' && data.filename[3] == 'o' && data.filename[4] == 't')) {
+            events.perf_submit(ctx, &data, sizeof(data));
+    }
+    return 0;
+}
+
+// HOOK 3: Fileless Execution
+int syscall__memfd_create(struct pt_regs *ctx, const char __user *name) {
+    struct data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.uid = bpf_get_current_uid_gid();
+    data.type = 4; 
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    bpf_probe_read_user_str(&data.filename, sizeof(data.filename), name);
+
+    events.perf_submit(ctx, &data, sizeof(data));
+    return 0;
+}
+
+// LSM HOOK: Anti-Tamper
 LSM_PROBE(task_kill, struct task_struct *p, struct kernel_siginfo *info, int sig, const struct cred *cred)
 {
     u32 target_pid = p->tgid;
     int key = 0;
     u32 *my_pid = protected_pid.lookup(&key);
 
-    // Check if target is Self AND signal is lethal (SIGKILL=9, SIGTERM=15)
     if (my_pid && target_pid == *my_pid) {
         if (sig == 9 || sig == 15) {
-            
             struct data_t data = {};
-            data.type = TYPE_SELF_PROT;
-            data.pid = bpf_get_current_pid_tgid() >> 32; // Source PID (Attacker)
-            data.sig = sig;
+            data.type = 99; 
+            data.pid = bpf_get_current_pid_tgid() >> 32;
             bpf_get_current_comm(&data.comm, sizeof(data.comm));
-            
+            data.filename[0] = 'K'; data.filename[1] = 'I'; data.filename[2] = 'L'; data.filename[3] = 'L';
             events.perf_submit(ctx, &data, sizeof(data));
-
-            // Block the signal
             return -EPERM;
         }
     }
     return 0;
 }
-
-// Helper: Validate if path is a standard system directory
-static int is_system_path(char *f) {
-    if (f[0] == '/' && f[1] == 'u' && f[2] == 's' && f[3] == 'r') return 1; // /usr
-    if (f[0] == '/' && f[1] == 'b' && f[2] == 'i' && f[3] == 'n') return 1; // /bin
-    if (f[0] == '/' && f[1] == 's' && f[2] == 'b' && f[3] == 'i') return 1; // /sbin
-    if (f[0] == '/' && f[1] == 's' && f[2] == 'n' && f[3] == 'a') return 1; // /snap
-    return 0;
-}
-
-static void get_parent_info(struct data_t *data) {
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct task_struct *parent = task->real_parent;
-    data->ppid = parent->tgid;
-    bpf_probe_read_kernel(&data->pcomm, sizeof(data->pcomm), parent->comm);
-}
-
-// --- ZERO MODULE: Fileless Detection ---
-TRACEPOINT_PROBE(syscalls, sys_enter_memfd_create) {
-    struct data_t data = {};
-    get_parent_info(&data);
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
-    
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    if (whitelist_map.lookup(&pid)) return 0;
-
-    struct proc_key_t key = {};
-    __builtin_memcpy(&key.name, data.comm, sizeof(key.name));
-    if (trusted_comms.lookup(&key)) return 0;
-
-    bpf_probe_read_user_str(&data.fname, sizeof(data.fname), args->uname);
-    
-    // Noise filters for common frameworks
-    if (data.fname[0] == 'g' && data.fname[1] == 'd') return 0; 
-    if (data.fname[0] == 'm' && data.fname[1] == 'o') return 0;
-
-    data.type = TYPE_ZERO_MEMFD;
-    data.pid = pid;
-    data.uid = bpf_get_current_uid_gid();
-    events.perf_submit(args, &data, sizeof(data));
-    return 0;
-}
-
-// --- CORE MODULE: Execution Monitoring ---
-TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
-    struct data_t data = {};
-    get_parent_info(&data);
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
-    bpf_probe_read_user_str(&data.fname, sizeof(data.fname), args->filename);
-    
-    data.pid = bpf_get_current_pid_tgid() >> 32;
-    data.uid = bpf_get_current_uid_gid();
-    data.type = TYPE_EXEC;
-    data.killed = 0;
-
-    char *f = data.fname;
-    
-    // RULE 1: Block access to shadow file
-    if (f[0] == '/' && f[1] == 'e' && f[2] == 't' && f[3] == 'c' && f[5] == 'h' && f[6] == 'a') {
-        bpf_send_signal(9); 
-        data.killed = 1;
-        events.perf_submit(args, &data, sizeof(data));
-        return 0;
-    }
-
-    // RULE 2: Anti-Spoofing (Trust only system paths)
-    if (is_system_path(f)) return 0;
-
-    events.perf_submit(args, &data, sizeof(data));
-    return 0;
-}
 """
 
-def load_settings(bpf_obj):
-    # 1. Load Trusted Process Names
-    for comm in TRUSTED_COMMS:
-        key = bpf_obj["trusted_comms"].Key()
-        key.name = comm.encode('utf-8')[:15]
-        bpf_obj["trusted_comms"][key] = ctypes.c_uint32(1)
-    
-    my_pid = os.getpid()
-    
-    # 2. Whitelist Agent PID to prevent self-looping
-    bpf_obj["whitelist_map"][ctypes.c_uint32(my_pid)] = ctypes.c_uint32(1)
-    
-    # 3. Register Agent PID for Anti-Tamper Protection
-    bpf_obj["protected_pid"][ctypes.c_int(0)] = ctypes.c_uint32(my_pid)
-    
-    print(f"[INFO] Kernel-Eye active. PID: {my_pid}")
-    print(f"[INFO] Anti-Tamper & Anti-Spoofing modules loaded.")
+# ==============================================================================
+# AGENT LOGIC
+# ==============================================================================
 
-def handle_event(cpu, data, size):
-    event = b["events"].event(data)
-    fname = event.fname.decode('utf-8', 'ignore').strip()
-    comm = event.comm.decode('utf-8', 'ignore').strip()
-    pcomm = event.pcomm.decode('utf-8', 'ignore').strip()
-    
-    # Local noise filtering for CLI tools
-    if any(x in fname for x in ["fnm", "gitstatus", "cpuUsage", ".local/share"]): return
+class KernelEyeAgent:
+    def __init__(self):
+        self.bpf = None
+        self.running = False
+        self._clear_screen()
+        print(f"{C_CYAN}[*] Initializing Kernel-Eye Agent...{C_RESET}")
+        self._check_root()
+        self._init_bpf()
 
-    # --- CRITICAL: TAMPER PROTECTION ALERT ---
-    if event.type == TYPE_SELF_PROT:
-        alert_msg = f"[CRITICAL] TAMPER BLOCKED | Source: {comm}({event.pid}) attempted signal {event.sig}."
-        print(f"\033[91m{alert_msg}\033[0m")
+    def _clear_screen(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    def _check_root(self):
+        if os.geteuid() != 0:
+            print(f"{C_RED}[-] Error: Kernel-Eye requires root privileges.{C_RESET}")
+            sys.exit(1)
+
+    def _init_bpf(self):
+        try:
+            print(f"{C_BLUE}[*] Loading eBPF probes...{C_RESET}")
+            self.bpf = BPF(text=BPF_PROGRAM_SOURCE)
+            
+            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("execve"), fn_name="syscall__execve")
+            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("openat"), fn_name="syscall__openat")
+            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("memfd_create"), fn_name="syscall__memfd_create")
+            
+            my_pid = os.getpid()
+            self.bpf["protected_pid"][ctypes.c_int(0)] = ctypes.c_uint32(my_pid)
+            print(f"{C_GREEN}[+] Anti-Tamper Protection: Active (PID: {my_pid}){C_RESET}")
+            
+        except Exception as e:
+            print(f"{C_RED}[-] Critical Error: {e}{C_RESET}")
+            sys.exit(1)
+
+    def log_event(self, event_data):
+            try:
+                with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+                    json.dump(event_data, f)
+                    f.write("\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception as e:
+                print(f"{C_RED}[!] LOG ERROR: Could not write to JSON: {e}{C_RESET}")
+
+    def print_dashboard_row(self, alert_type, pid, process, details, color):
+        print(f"{color}{alert_type:<12} | {pid:<6} | {process:<15} | {details}{C_RESET}")
+
+    def enforce_policy(self, cpu, data, size):
+        event = self.bpf["events"].event(data)
         
-        logger.info(json.dumps({
+        try:
+            comm = event.comm.decode('utf-8', 'ignore').strip()
+            filename = event.filename.decode('utf-8', 'ignore').strip()
+        except:
+            return
+
+        # 1. TAMPER CHECK
+        if event.type == 99:
+             self.print_dashboard_row("TAMPER", event.pid, comm, "KILL ATTEMPT [BLOCKED]", C_RED + C_BOLD)
+             return
+
+        # 2. WHITELIST CHECK
+        is_whitelisted = event.comm in WHITELIST_PROCESSES
+        should_kill = False
+        
+        # Rule: Exec from /tmp or /dev/shm
+        if event.type == 1:
+            if filename.startswith("/tmp") or filename.startswith("/dev/shm"):
+                should_kill = True
+                is_whitelisted = False
+        
+        # Rule: Fileless execution by Interpreters
+        if event.type == 4:
+            if event.comm in [b"python3", b"node", b"perl", b"ruby", b"php"]:
+                should_kill = True
+                is_whitelisted = False
+
+        if is_whitelisted and not should_kill:
+            return
+
+        # Noise Filter
+        if event.type == 4 and not should_kill:
+            if any(x in filename for x in ["pulseaudio", "shm", "gdk", "mozilla", "xshm", "memfd:", "render", "wayland"]): return
+
+        event_name = EVENT_TYPES.get(event.type, "UNK")
+        
+        log_entry = {
             "timestamp": datetime.datetime.now().isoformat(),
-            "event_type": "SECURITY_TAMPERING",
-            "severity": "CRITICAL",
-            "actor": {"process_name": comm, "pid": event.pid},
-            "details": f"Unauthorized termination attempt (Signal {event.sig})",
-            "action": "BLOCKED"
-        }))
-        return
-
-    # Determine Event Category
-    if event.type == TYPE_EXEC:
-        category = "PROCESS_EXECUTION"
-    else:
-        category = "FILELESS_ACTIVITY"
-
-    # Determine Severity
-    severity = "INFO"
-    if event.killed: severity = "CRITICAL"
-    elif category == "FILELESS_ACTIVITY": severity = "HIGH"
-    elif "/tmp/" in fname or "/home/" in fname: 
-        severity = "SUSPICIOUS" 
-
-    log_entry = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "hostname": socket.gethostname(),
-        "agent": "Kernel-Eye",
-        "event_type": category,
-        "severity": severity,
-        "action": "BLOCKED" if event.killed else "DETECTED",
-        "actor": {
             "pid": event.pid,
-            "uid": event.uid,
-            "process_name": comm,
-            "ppid": event.ppid,
-            "parent_process": pcomm
-        },
-        "target": {
-            "file_path": fname
+            "process": comm,
+            "target": filename,
+            "event_type": event_name,
+            "severity": "LOW",
+            "action": "MONITOR"
         }
-    }
 
-    # Write to SIEM Log
-    logger.info(json.dumps(log_entry))
+        # --- ENFORCEMENT ---
 
-    # Console Output (Admin View)
-    color = "\033[96m" # Cyan (Info)
-    if severity == "CRITICAL": color = "\033[91m" # Red
-    elif severity == "HIGH": color = "\033[93m" # Yellow
-    elif severity == "SUSPICIOUS": color = "\033[95m" # Magenta
-    
-    print(f"{color}[{severity}] {log_entry['action']} | Tree: {pcomm}({event.ppid}) -> {comm}({event.pid}) | Target: {fname}\033[0m")
+        # BLOCK CRITICAL FILES
+        if event.type == 2 and any(p in filename.encode() for p in PROTECTED_PATHS):
+            log_entry["severity"] = "CRITICAL"
+            log_entry["action"] = "BLOCKED"
+            try: os.kill(event.pid, signal.SIGKILL)
+            except: pass
+            self.print_dashboard_row("CRITICAL", event.pid, comm, f"ACCESS DENIED: {filename} [KILL]", C_RED + C_BOLD)
+            self.log_event(log_entry)
 
-try:
-    if not os.path.exists(LOG_FILE):
-        open(LOG_FILE, 'a').close()
-        os.chmod(LOG_FILE, 0o600)
+        # BLOCK MALICIOUS EXEC
+        elif should_kill:
+            log_entry["severity"] = "HIGH"
+            log_entry["action"] = "BLOCKED"
+            try: os.kill(event.pid, signal.SIGKILL)
+            except: pass
+            
+            if event.type == 4:
+                 self.print_dashboard_row("FILELESS", event.pid, comm, f"MEMFD BLOCKED: {filename} [KILL]", C_YELLOW + C_BOLD)
+            else:
+                 self.print_dashboard_row("SUSPICIOUS", event.pid, comm, f"EXEC BLOCKED: {filename} [KILL]", C_MAGENTA + C_BOLD)
+            
+            self.log_event(log_entry)
 
-    b = BPF(text=bpf_source)
-    load_settings(b)
-    b["events"].open_perf_buffer(handle_event)
-except Exception as e:
-    print(f"[ERROR] Initialization failed: {e}")
-    sys.exit(1)
+        elif event.type == 1 and event.uid == 0:
+             self.print_dashboard_row("ROOT EXEC", event.pid, comm, f"CMD: {filename}", C_CYAN)
 
-# Main Loop
-while True:
-    try:
-        b.perf_buffer_poll()
-    except KeyboardInterrupt:
-        print("\n[INFO] Stopping agent...")
-        sys.exit(0)
+    def run(self):
+        self.running = True
+        print(f"{C_GREEN}[+] Kernel-Eye is Active.{C_RESET}")
+        print(f"{C_CYAN}[*] IPS: Enabled | Anti-Tamper: Enabled | Logging: JSON{C_RESET}")
+        print("-" * 95)
+        print(f"{C_BOLD}{'ALERT TYPE':<12} | {'PID':<6} | {'PROCESS':<15} | {'DETAILS'}{C_RESET}")
+        print("-" * 95)
+        
+        self.bpf["events"].open_perf_buffer(self.enforce_policy)
+        try:
+            while self.running:
+                self.bpf.perf_buffer_poll()
+        except KeyboardInterrupt:
+            print(f"\n{C_RED}[*] Stopping Kernel-Eye Agent...{C_RESET}")
+            sys.exit(0)
+
+if __name__ == "__main__":
+    KernelEyeAgent().run()

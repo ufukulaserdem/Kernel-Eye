@@ -1,15 +1,15 @@
 [Unit]
-Description=Kernel-Eye Security Agent (eBPF)
+Description=Kernel-Eye eBPF Security Agent
 After=network.target auditd.service
 
 [Service]
 Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/kernel-eye
+Environment=PYTHONUNBUFFERED=1
 User=root
-ExecStart=/usr/bin/python3 /usr/local/bin/kernel_eye.py
+Group=root
 Restart=always
 RestartSec=3
-Environment=PYTHONUNBUFFERED=1
-ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

@@ -21,7 +21,7 @@ It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intru
 * **Zero-Trust (Fileless Detection):** Monitors `sys_enter_memfd_create` to detect and log fileless malware execution attempts residing purely in RAM.
 * **Active Blocking (IPS):** Automatically terminates (SIGKILL) processes attempting to access critical files like `/etc/shadow`.
 * **SIEM-Ready Logging:** Outputs structured, industry-standard JSON logs to `/var/log/kernel-eye.json`, ready for ingestion by Splunk, ELK, or Wazuh.
-* **High Performance:** Powered by eBPF (CO-RE principles applied via BCC) for minimal system overhead.
+* **High Performance:** Powered by eBPF via BCC for minimal system overhead and deep kernel visibility.
 
 ## Installation
 
@@ -43,13 +43,12 @@ sudo apt-get install bpfcc-tools python3-bpfcc
 
 ## 2. Automatic Install (Recommended)
 
-This will set up the systemd service and configure the environment.
+Kernel-Eye uses a standard `Makefile` for deployment, adhering to Linux conventions.
 
 ```bash
-git clone [https://github.com/ufukulaserdem/Kernel-Eye.git](https://github.com/ufukulaserdem/Kernel-Eye.git)
+git clone https://github.com/ufukulaserdem/Kernel-Eye.git
 cd Kernel-Eye
-chmod +x install.sh
-sudo ./install.sh
+sudo make install
 ```
 
 ## 3. Configuration & Monitoring
@@ -69,29 +68,31 @@ tail -f /var/log/kernel-eye.json
 ```
 ## Detection Logic
 
-The following table outlines the enforcement rules applied by the eBPF agent in kernel space:
+The following table outlines the **Active Enforcement Rules** applied by the Kernel-Eye agent. Unlike traditional EDRs that only alert, Kernel-Eye actively neutralizes threats in real-time.
 
 | Alert Type | Trigger Condition | Severity | Action |
 | :--- | :--- | :--- | :--- |
-| **SELF_PROT** | Attempt to send lethal signal (9/15) to the Agent | 🔴 Critical | **BLOCK & LOG** |
-| **CRITICAL** | Unauthorized access to `/etc/shadow` | 🔴 Critical | **KILL PROCESS** |
-| **FILELESS** | Usage of `memfd_create` (Malware running in RAM) | 🟠 High | Log / Detect |
-| **SPOOFING** | Trusted binary name (e.g., `code`) executing from non-system path (`/tmp`, `/home`) | 🟠 High | Log / Detect |
-| **ROOT** | Unexpected process execution with UID 0 | 🟡 Medium | Log |
+| **CRITICAL** | Unauthorized access to `/etc/shadow`, `/etc/sudoers` or `/root/.ssh` | 🔴 Critical | **SIGKILL (Instant Block)** |
+| **SUSPICIOUS** | Any binary/script executing from volatile paths (`/tmp`, `/dev/shm`) | 🟣 High | **SIGKILL (Prevent Exec)** |
+| **FILELESS** | Interpreters (Python, Node, Perl) creating memory-only files via `memfd_create` | 🟡 High | **SIGKILL (Terminate)** |
+| **ROOT_EXEC** | Unexpected root commands (e.g. `whoami`, `id`) from non-whitelisted processes | 🔵 Info | **Log / Monitor** |
+| **TAMPER** | Attempts to send lethal signals (`SIGKILL`) to the Kernel-Eye agent | 🔴 Critical | **LSM Block (Self-Prot)** |
 
 ## Roadmap
 
 ### Completed Capabilities
-- [x] **Anti-Tamper:** LSM Hook implementation for self-protection.
-- [x] **Context Awareness:** Parent-Child process tree analysis (`bash` -> `python` -> `malware`).
-- [x] **Anti-Spoofing:** Binary path verification vs. process name.
-- [x] **Fileless Defense:** Memory file descriptor monitoring.
+- [x] **Real-Time Dashboard:** CLI-based interactive monitoring interface with color-coded alerts.
+- [x] **Context-Aware Whitelisting:** Smart filtering that distinguishes legitimate tools from threats (e.g., allows `python3` but blocks if it executes `memfd_create`).
+- [x] **Active IPS (Intrusion Prevention):** Automatically terminates (SIGKILL) processes accessing protected files or executing from `/tmp`.
+- [x] **Anti-Tamper (Immortal Mode):** Protects the agent from being killed by root users via LSM hooks.
+- [x] **Fileless Defense:** Detects malware executing purely from RAM (memory file descriptors).
 - [x] **SIEM Integration:** JSON Structured Logging.
 
-### Future Work
-- [ ] **CO-RE Migration:** Porting from BCC (Python) to libbpf (C) for dependency-free deployment.
-- [ ] **YARA Integration:** Scanning file content upon `openat`.
-- [ ] **Network Module:** Re-implementing eBPF socket filters for C2 detection.
+### Future Work & Engineering Goals
+- [ ] **CO-RE Migration (Rust):** Porting the agent to **Rust (Aya)** to remove runtime dependencies (BCC/Clang) and create a single, portable binary (Solving "Dependency Hell").
+- [ ] **Deep Kernel Blocking (LSM):** Moving the enforcement logic entirely to Kernel Space (`-EPERM`) to eliminate **TOCTOU (Time-of-Check Time-of-Use)** race conditions.
+- [ ] **Signature Verification:** Implementing SHA256 hash checks and Inode verification to prevent **"Masquerading"** attacks (where malware mimics valid binary names).
+- [ ] **Network Visibility:** Implementing eBPF `sock_ops` and Traffic Control (TC) filters to detect C2 (Command & Control) beaconing.
     
 ## Contributing
 
