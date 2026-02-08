@@ -26,21 +26,21 @@ User space remains responsible for policy loading and JSON logging, while enforc
 
 ```mermaid
 flowchart TB
-  subgraph UserSpace[User Space (Python Control Plane)]
+  subgraph UserSpace["User Space (Python Control Plane)"]
     U1[Kernel-Eye Agent]
     U2[Policy Loader]
     U3[SIEM/JSON Logger]
   end
 
-  subgraph Maps[eBPF Maps (Decision Engine)]
-    M1[protected_files\n(dev, ino)]
-    M2[whitelist\n(comm)]
+  subgraph Maps["eBPF Maps (Decision Engine)"]
+    M1["protected_files\n(dev, ino)"]
+    M2["whitelist\n(comm)"]
     M3[protected_pid]
   end
 
-  subgraph Kernel[Kernel Space (LSM Enforcement)]
-    K1[LSM file_open\n(Proactive Block)]
-    K2[LSM task_kill\n(Anti-Tamper)]
+  subgraph Kernel["Kernel Space (LSM Enforcement)"]
+    K1["LSM file_open\n(Proactive Block)"]
+    K2["LSM task_kill\n(Anti-Tamper)"]
   end
 
   U2 -->|Populate| M1
