@@ -6,7 +6,7 @@ Kernel-Eye: eBPF-Based Linux Threat Detection & Response Agent.
 Author: Ufuk Ulas Erdem
 License: MIT
 Description:
-    Real-time kernel-level EDR agent utilizing eBPF/LSM hooks for 
+    Real-time kernel-level EDR agent utilizing eBPF/LSM hooks for
     process monitoring, fileless threat detection, and active intrusion prevention.
 """
 
@@ -53,22 +53,22 @@ PROTECTED_PATHS_STR = [p.decode("utf-8", "ignore") for p in PROTECTED_PATHS]
 # --- WHITELIST CONFIGURATION ---
 WHITELIST_PROCESSES = [
     # System Services
-    b"systemd", b"dbus-daemon", b"polkitd", b"rtkit-daemon", b"sshd", 
+    b"systemd", b"dbus-daemon", b"polkitd", b"rtkit-daemon", b"sshd",
     b"login", b"sudo", b"kworker", b"unix_chkpwd",
     b"systemd-userwor", b"systemd-userwork", b"(sd-worker)",
     b"accounts-daemon", b"quota",
-    
+
     # Desktop Integration (Prevents browser/GUI crashes)
     b"xdg-desktop-por", b"xdg-desktop-portal", b"flatpak",
     b"gnome-shell", b"plasmashell", b"kwin_wayland", b"Xorg",
-    
+
     # Audio & Multimedia
     b"pipewire", b"pipewire-pulse", b"wireplumber", b"spotify",
-    
+
     # Development Tools & Browsers
-    b"code", b"zen", b"ghostty", b"chrome", b"firefox", b"brave", 
+    b"code", b"zen", b"ghostty", b"chrome", b"firefox", b"brave",
     b"git",
-    
+
     # Interpreters
     b"bash", b"zsh", b"sh", b"python3", b"node"
 ]
@@ -78,7 +78,6 @@ WHITELIST_NAMES = {p.decode("utf-8", "ignore")[:15] for p in WHITELIST_PROCESSES
 class FileId(ctypes.Structure):
     _fields_ = [
         ("ino", ctypes.c_ulonglong),
-        ("dev", ctypes.c_ulonglong),
     ]
 
 
@@ -105,14 +104,12 @@ struct data_t {
     u32 type;
     u32 blocked;
     u64 ino;
-    u64 dev;
     char comm[16];
     char filename[MAX_PATH_LEN];
 };
 
 struct file_id {
     u64 ino;
-    u64 dev;
 };
 
 struct comm_key {
@@ -120,7 +117,7 @@ struct comm_key {
 };
 
 BPF_PERF_OUTPUT(events);
-BPF_ARRAY(protected_pid, u32, 1); 
+BPF_ARRAY(protected_pid, u32, 1);
 BPF_HASH(protected_files, struct file_id, u8);
 BPF_HASH(whitelist, struct comm_key, u8);
 
@@ -136,21 +133,21 @@ int syscall__execve(struct pt_regs *ctx, const char __user *filename) {
     struct data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.uid = bpf_get_current_uid_gid();
-    data.type = 1; 
+    data.type = 1;
 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), filename);
-    
+
     events.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
 
-// HOOK 2: File Access
+// HOOK 2: File Access (Telemetry)
 int syscall__openat(struct pt_regs *ctx, int dfd, const char __user *filename, int flags) {
     struct data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.uid = bpf_get_current_uid_gid();
-    data.type = 2; 
+    data.type = 2;
 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), filename);
@@ -167,7 +164,7 @@ int syscall__memfd_create(struct pt_regs *ctx, const char __user *name) {
     struct data_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
     data.uid = bpf_get_current_uid_gid();
-    data.type = 4; 
+    data.type = 4;
 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), name);
@@ -176,7 +173,7 @@ int syscall__memfd_create(struct pt_regs *ctx, const char __user *name) {
     return 0;
 }
 
-// LSM HOOK: Proactive File Blocking
+// LSM HOOK: Proactive File Blocking (Inode-only)
 LSM_PROBE(file_open, struct file *file, const struct cred *cred)
 {
     if (!file) {
@@ -187,13 +184,9 @@ LSM_PROBE(file_open, struct file *file, const struct cred *cred)
     if (!inode) {
         return 0;
     }
-    if (!inode->i_sb) {
-        return 0;
-    }
 
     struct file_id fid = {};
     fid.ino = inode->i_ino;
-    fid.dev = inode->i_sb->s_dev;
 
     u8 *protected = protected_files.lookup(&fid);
     if (!protected) {
@@ -206,7 +199,6 @@ LSM_PROBE(file_open, struct file *file, const struct cred *cred)
     data.type = 2;
     data.blocked = 1;
     data.ino = fid.ino;
-    data.dev = fid.dev;
 
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     if (is_whitelisted(data.comm)) {
@@ -232,7 +224,7 @@ LSM_PROBE(task_kill, struct task_struct *p, struct kernel_siginfo *info, int sig
     if (my_pid && target_pid == *my_pid) {
         if (sig == 9 || sig == 15) {
             struct data_t data = {};
-            data.type = 99; 
+            data.type = 99;
             data.pid = bpf_get_current_pid_tgid() >> 32;
             bpf_get_current_comm(&data.comm, sizeof(data.comm));
             data.filename[0] = 'K'; data.filename[1] = 'I'; data.filename[2] = 'L'; data.filename[3] = 'L';
@@ -269,7 +261,7 @@ class KernelEyeAgent:
         try:
             print(f"{C_BLUE}[*] Loading eBPF probes...{C_RESET}")
             self.bpf = BPF(text=BPF_PROGRAM_SOURCE)
-            
+
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("execve"), fn_name="syscall__execve")
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("openat"), fn_name="syscall__openat")
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("memfd_create"), fn_name="syscall__memfd_create")
@@ -279,11 +271,11 @@ class KernelEyeAgent:
             except Exception as e:
                 print(f"{C_YELLOW}[!] Warning: LSM hooks not attached ({e}). Kernel 5.7+ required.{C_RESET}")
             self._load_policy_maps()
-            
+
             my_pid = os.getpid()
             self.bpf["protected_pid"][ctypes.c_int(0)] = ctypes.c_uint32(my_pid)
             print(f"{C_GREEN}[+] Anti-Tamper Protection: Active (PID: {my_pid}){C_RESET}")
-            
+
         except Exception as e:
             print(f"{C_RED}[-] Critical Error: {e}{C_RESET}")
             sys.exit(1)
@@ -309,9 +301,10 @@ class KernelEyeAgent:
                 print(f"{C_YELLOW}[!] Warning: Could not stat {path}: {e}{C_RESET}")
                 continue
 
-            key = FileId(stat_info.st_ino, stat_info.st_dev)
+            key = FileId(stat_info.st_ino)
             protected_map[key] = ctypes.c_ubyte(1)
-            self.protected_file_ids[(int(stat_info.st_dev), int(stat_info.st_ino))] = path
+            self.protected_file_ids[int(stat_info.st_ino)] = path
+            print(f"{C_CYAN}[DEBUG] Protecting {path} -> Inode: {int(stat_info.st_ino)}{C_RESET}")
 
     def log_event(self, event_data):
             try:
@@ -328,7 +321,7 @@ class KernelEyeAgent:
 
     def enforce_policy(self, cpu, data, size):
         event = self.bpf["events"].event(data)
-        
+
         try:
             comm = event.comm.decode('utf-8', 'ignore').rstrip("\x00").strip()
             filename = event.filename.decode('utf-8', 'ignore').rstrip("\x00").strip()
@@ -342,7 +335,7 @@ class KernelEyeAgent:
 
         # 2. KERNEL-LEVEL FILE BLOCK (LSM)
         if event.type == 2 and getattr(event, "blocked", 0) == 1:
-            mapped_path = self.protected_file_ids.get((int(event.dev), int(event.ino)))
+            mapped_path = self.protected_file_ids.get(int(event.ino))
             if mapped_path:
                 filename = mapped_path
             elif not filename:
@@ -376,13 +369,13 @@ class KernelEyeAgent:
         # 3. WHITELIST CHECK
         is_whitelisted = comm in WHITELIST_NAMES
         should_kill = False
-        
+
         # Rule: Exec from /tmp or /dev/shm
         if event.type == 1:
             if filename.startswith("/tmp") or filename.startswith("/dev/shm"):
                 should_kill = True
                 is_whitelisted = False
-        
+
         # Rule: Fileless execution by Interpreters
         if event.type == 4:
             if comm in ["python3", "node", "perl", "ruby", "php"]:
@@ -394,10 +387,11 @@ class KernelEyeAgent:
 
         # Noise Filter
         if event.type == 4 and not should_kill:
-            if any(x in filename for x in ["pulseaudio", "shm", "gdk", "mozilla", "xshm", "memfd:", "render", "wayland"]): return
+            if any(x in filename for x in ["pulseaudio", "shm", "gdk", "mozilla", "xshm", "memfd:", "render", "wayland"]):
+                return
 
         event_name = EVENT_TYPES.get(event.type, "UNK")
-        
+
         log_entry = {
             "timestamp": datetime.datetime.now().isoformat(),
             "pid": event.pid,
@@ -414,14 +408,16 @@ class KernelEyeAgent:
         if should_kill:
             log_entry["severity"] = "HIGH"
             log_entry["action"] = "BLOCKED"
-            try: os.kill(event.pid, signal.SIGKILL)
-            except: pass
-            
+            try:
+                os.kill(event.pid, signal.SIGKILL)
+            except:
+                pass
+
             if event.type == 4:
                  self.print_dashboard_row("FILELESS", event.pid, comm, f"MEMFD BLOCKED: {filename} [KILL]", C_YELLOW + C_BOLD)
             else:
                  self.print_dashboard_row("SUSPICIOUS", event.pid, comm, f"EXEC BLOCKED: {filename} [KILL]", C_MAGENTA + C_BOLD)
-            
+
             self.log_event(log_entry)
 
         elif event.type == 1 and event.uid == 0:
@@ -434,7 +430,7 @@ class KernelEyeAgent:
         print("-" * 95)
         print(f"{C_BOLD}{'ALERT TYPE':<12} | {'PID':<6} | {'PROCESS':<15} | {'DETAILS'}{C_RESET}")
         print("-" * 95)
-        
+
         self.bpf["events"].open_perf_buffer(self.enforce_policy)
         try:
             while self.running:

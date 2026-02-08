@@ -17,10 +17,14 @@
 Kernel-Eye v3.0 replaces reactive, user-space SIGKILL enforcement with **proactive LSM-based blocking**. The `file_open` hook executes at the point of authorization and returns `-EPERM` for protected files when the calling process is not allowlisted. The `task_kill` hook provides self-protection by rejecting lethal signals directed at the agent, turning tamper attempts into security events.
 
 Policy decisions are executed in-kernel using eBPF maps:
-- `protected_files`: Hash map keyed by `(dev, ino)` to validate access to sensitive files in O(1) time without path walking.
+- `protected_files`: Hash map keyed by **inode only** (`ino`) to validate access in O(1) time without path walking. This avoids device-ID mismatches on filesystems like Btrfs.
 - `whitelist`: Fixed-width command name map (`comm`) to allow trusted processes.
 
 User space remains responsible for policy loading and JSON logging, while enforcement occurs in kernel space.
+
+## Filesystem Compatibility
+
+Kernel-Eye uses **inode-only** identity for protected files to remain consistent across filesystems where the device ID reported in user space may not match the kernel superblock value (e.g., Btrfs). This improves reliability of LSM enforcement on modern Linux distributions.
 
 ## Architecture Diagram
 
@@ -33,7 +37,7 @@ flowchart TB
   end
 
   subgraph Maps[eBPF Maps (Decision Engine)]
-    M1[protected_files\n(dev, ino)]
+    M1[protected_files\n(ino)]
     M2[whitelist\n(comm)]
     M3[protected_pid]
   end
