@@ -48,6 +48,7 @@ PROTECTED_PATHS = [
     b"/etc/sudoers",
     b"/root/.ssh/authorized_keys"
 ]
+PROTECTED_PATHS_STR = [p.decode("utf-8", "ignore") for p in PROTECTED_PATHS]
 
 # --- WHITELIST CONFIGURATION ---
 WHITELIST_PROCESSES = [
@@ -71,6 +72,20 @@ WHITELIST_PROCESSES = [
     # Interpreters
     b"bash", b"zsh", b"sh", b"python3", b"node"
 ]
+WHITELIST_NAMES = {p.decode("utf-8", "ignore")[:15] for p in WHITELIST_PROCESSES}
+
+
+class FileId(ctypes.Structure):
+    _fields_ = [
+        ("ino", ctypes.c_ulonglong),
+        ("dev", ctypes.c_ulonglong),
+    ]
+
+
+class CommKey(ctypes.Structure):
+    _fields_ = [
+        ("comm", ctypes.c_char * 16),
+    ]
 
 # ==============================================================================
 # eBPF KERNEL PROGRAM (C SOURCE)
@@ -88,12 +103,33 @@ struct data_t {
     u32 pid;
     u32 uid;
     u32 type;
+    u32 blocked;
+    u64 ino;
+    u64 dev;
     char comm[16];
     char filename[MAX_PATH_LEN];
 };
 
+struct file_id {
+    u64 ino;
+    u64 dev;
+};
+
+struct comm_key {
+    char comm[16];
+};
+
 BPF_PERF_OUTPUT(events);
 BPF_ARRAY(protected_pid, u32, 1); 
+BPF_HASH(protected_files, struct file_id, u8);
+BPF_HASH(whitelist, struct comm_key, u8);
+
+static __always_inline int is_whitelisted(char comm[16]) {
+    struct comm_key key = {};
+    __builtin_memcpy(&key.comm, comm, sizeof(key.comm));
+    u8 *allowed = whitelist.lookup(&key);
+    return allowed ? 1 : 0;
+}
 
 // HOOK 1: Process Execution
 int syscall__execve(struct pt_regs *ctx, const char __user *filename) {
@@ -138,6 +174,52 @@ int syscall__memfd_create(struct pt_regs *ctx, const char __user *name) {
 
     events.perf_submit(ctx, &data, sizeof(data));
     return 0;
+}
+
+// LSM HOOK: Proactive File Blocking
+LSM_PROBE(file_open, struct file *file, const struct cred *cred)
+{
+    if (!file) {
+        return 0;
+    }
+
+    struct inode *inode = file->f_inode;
+    if (!inode) {
+        return 0;
+    }
+    if (!inode->i_sb) {
+        return 0;
+    }
+
+    struct file_id fid = {};
+    fid.ino = inode->i_ino;
+    fid.dev = inode->i_sb->s_dev;
+
+    u8 *protected = protected_files.lookup(&fid);
+    if (!protected) {
+        return 0;
+    }
+
+    struct data_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.uid = bpf_get_current_uid_gid();
+    data.type = 2;
+    data.blocked = 1;
+    data.ino = fid.ino;
+    data.dev = fid.dev;
+
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    if (is_whitelisted(data.comm)) {
+        return 0;
+    }
+
+    data.filename[0] = 'P'; data.filename[1] = 'R'; data.filename[2] = 'O';
+    data.filename[3] = 'T'; data.filename[4] = 'E'; data.filename[5] = 'C';
+    data.filename[6] = 'T'; data.filename[7] = 'E'; data.filename[8] = 'D';
+    data.filename[9] = 0;
+
+    events.perf_submit(ctx, &data, sizeof(data));
+    return -EPERM;
 }
 
 // LSM HOOK: Anti-Tamper
@@ -191,6 +273,12 @@ class KernelEyeAgent:
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("execve"), fn_name="syscall__execve")
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("openat"), fn_name="syscall__openat")
             self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("memfd_create"), fn_name="syscall__memfd_create")
+            try:
+                self.bpf.attach_lsm(fn_name="file_open")
+                self.bpf.attach_lsm(fn_name="task_kill")
+            except Exception as e:
+                print(f"{C_YELLOW}[!] Warning: LSM hooks not attached ({e}). Kernel 5.7+ required.{C_RESET}")
+            self._load_policy_maps()
             
             my_pid = os.getpid()
             self.bpf["protected_pid"][ctypes.c_int(0)] = ctypes.c_uint32(my_pid)
@@ -199,6 +287,31 @@ class KernelEyeAgent:
         except Exception as e:
             print(f"{C_RED}[-] Critical Error: {e}{C_RESET}")
             sys.exit(1)
+
+    def _load_policy_maps(self):
+        self.protected_file_ids = {}
+        self.protected_paths = set(PROTECTED_PATHS_STR)
+
+        whitelist_map = self.bpf["whitelist"]
+        for comm in WHITELIST_PROCESSES:
+            key = CommKey()
+            key.comm = comm[:15]
+            whitelist_map[key] = ctypes.c_ubyte(1)
+
+        protected_map = self.bpf["protected_files"]
+        for path in PROTECTED_PATHS_STR:
+            try:
+                stat_info = os.stat(path, follow_symlinks=True)
+            except FileNotFoundError:
+                print(f"{C_YELLOW}[!] Warning: Protected file not found: {path}{C_RESET}")
+                continue
+            except Exception as e:
+                print(f"{C_YELLOW}[!] Warning: Could not stat {path}: {e}{C_RESET}")
+                continue
+
+            key = FileId(stat_info.st_ino, stat_info.st_dev)
+            protected_map[key] = ctypes.c_ubyte(1)
+            self.protected_file_ids[(int(stat_info.st_dev), int(stat_info.st_ino))] = path
 
     def log_event(self, event_data):
             try:
@@ -217,8 +330,8 @@ class KernelEyeAgent:
         event = self.bpf["events"].event(data)
         
         try:
-            comm = event.comm.decode('utf-8', 'ignore').strip()
-            filename = event.filename.decode('utf-8', 'ignore').strip()
+            comm = event.comm.decode('utf-8', 'ignore').rstrip("\x00").strip()
+            filename = event.filename.decode('utf-8', 'ignore').rstrip("\x00").strip()
         except:
             return
 
@@ -227,8 +340,41 @@ class KernelEyeAgent:
              self.print_dashboard_row("TAMPER", event.pid, comm, "KILL ATTEMPT [BLOCKED]", C_RED + C_BOLD)
              return
 
-        # 2. WHITELIST CHECK
-        is_whitelisted = event.comm in WHITELIST_PROCESSES
+        # 2. KERNEL-LEVEL FILE BLOCK (LSM)
+        if event.type == 2 and getattr(event, "blocked", 0) == 1:
+            mapped_path = self.protected_file_ids.get((int(event.dev), int(event.ino)))
+            if mapped_path:
+                filename = mapped_path
+            elif not filename:
+                filename = "PROTECTED"
+
+            event_name = EVENT_TYPES.get(event.type, "UNK")
+            log_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "pid": event.pid,
+                "process": comm,
+                "target": filename,
+                "event_type": event_name,
+                "severity": "CRITICAL",
+                "action": "BLOCKED"
+            }
+
+            self.print_dashboard_row(
+                "CRITICAL",
+                event.pid,
+                comm,
+                f"ACCESS DENIED: {filename} [LSM BLOCK]",
+                C_RED + C_BOLD
+            )
+            self.log_event(log_entry)
+            return
+
+        # Skip openat logs for protected files to avoid duplicate entries
+        if event.type == 2 and filename in self.protected_paths:
+            return
+
+        # 3. WHITELIST CHECK
+        is_whitelisted = comm in WHITELIST_NAMES
         should_kill = False
         
         # Rule: Exec from /tmp or /dev/shm
@@ -239,7 +385,7 @@ class KernelEyeAgent:
         
         # Rule: Fileless execution by Interpreters
         if event.type == 4:
-            if event.comm in [b"python3", b"node", b"perl", b"ruby", b"php"]:
+            if comm in ["python3", "node", "perl", "ruby", "php"]:
                 should_kill = True
                 is_whitelisted = False
 
@@ -264,17 +410,8 @@ class KernelEyeAgent:
 
         # --- ENFORCEMENT ---
 
-        # BLOCK CRITICAL FILES
-        if event.type == 2 and any(p in filename.encode() for p in PROTECTED_PATHS):
-            log_entry["severity"] = "CRITICAL"
-            log_entry["action"] = "BLOCKED"
-            try: os.kill(event.pid, signal.SIGKILL)
-            except: pass
-            self.print_dashboard_row("CRITICAL", event.pid, comm, f"ACCESS DENIED: {filename} [KILL]", C_RED + C_BOLD)
-            self.log_event(log_entry)
-
         # BLOCK MALICIOUS EXEC
-        elif should_kill:
+        if should_kill:
             log_entry["severity"] = "HIGH"
             log_entry["action"] = "BLOCKED"
             try: os.kill(event.pid, signal.SIGKILL)

@@ -1,0 +1,28 @@
+name: Kernel-Eye Security Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  red_team:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r) python3-bpfcc
+
+      - name: Start Kernel-Eye Agent
+        run: |
+          sudo python3 kernel_eye.py > /tmp/kernel-eye.log 2>&1 &
+          sleep 10
+
+      - name: Run Red Team Tests
+        run: |
+          sudo python3 tests/red_team_test.py

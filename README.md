@@ -1,108 +1,147 @@
-# Kernel-Eye: eBPF-Based Linux Threat Detection
+# Kernel-Eye v3.0: Kernel-Level Threat Detection & Blocking
 
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Security](https://img.shields.io/badge/Security-eBPF-red?style=for-the-badge)
 
-**Kernel-Eye** is a stealthy, kernel-level Endpoint Detection and Response (EDR) agent designed to monitor system calls directly from the source. By leveraging **eBPF (Extended Berkeley Packet Filter)**, it hooks into the Linux kernel to detect malicious activities that user-space antivirus tools might miss, making it ideal for Cloud Workload Protection (CWPP) scenarios.
+**Kernel-Eye** is a kernel-resident Endpoint Detection and Response (EDR) agent that enforces security policy at the Linux LSM layer. It combines eBPF instrumentation with LSM hooks to provide deterministic, in-kernel blocking of malicious activity while streaming structured telemetry to user space for SIEM ingestion.
 
-It functions as both an **IDS (Intrusion Detection System)** and an **IPS (Intrusion Prevention System)**, capable of automatically blocking threats in real-time.
+## What’s New in v3.0
 
-## Demo in Action
+- **Kernel-Level Enforcement:** Critical policy decisions are enforced inside the kernel using LSM hooks, eliminating TOCTOU windows associated with user-space reaction.
+- **Map-Driven Policy Engine:** High-performance O(1) decisions using eBPF maps for protected file identity and process allowlisting.
+- **Tamper Resistance:** LSM-based anti-tamper logic prevents termination of the agent itself.
 
-> **Scenario:** An attacker tries to execute a reverse shell or kill the agent using `kill -9`. Kernel-Eye blocks the termination attempt (Self-Protection), kills the malicious process, and generates a structured JSON log for SIEM analysis.
+## Architecture
 
-[kernel_eye.webm](https://github.com/user-attachments/assets/40bf9b8d-ed08-4ac5-9c83-4aebcfba08c8)
+Kernel-Eye v3.0 replaces reactive, user-space SIGKILL enforcement with **proactive LSM-based blocking**. The `file_open` hook executes at the point of authorization and returns `-EPERM` for protected files when the calling process is not allowlisted. The `task_kill` hook provides self-protection by rejecting lethal signals directed at the agent, turning tamper attempts into security events.
+
+Policy decisions are executed in-kernel using eBPF maps:
+- `protected_files`: Hash map keyed by `(dev, ino)` to validate access to sensitive files in O(1) time without path walking.
+- `whitelist`: Fixed-width command name map (`comm`) to allow trusted processes.
+
+User space remains responsible for policy loading and JSON logging, while enforcement occurs in kernel space.
+
+## Architecture Diagram
+
+```mermaid
+flowchart TB
+  subgraph UserSpace[User Space (Python Control Plane)]
+    U1[Kernel-Eye Agent]
+    U2[Policy Loader]
+    U3[SIEM/JSON Logger]
+  end
+
+  subgraph Maps[eBPF Maps (Decision Engine)]
+    M1[protected_files\n(dev, ino)]
+    M2[whitelist\n(comm)]
+    M3[protected_pid]
+  end
+
+  subgraph Kernel[Kernel Space (LSM Enforcement)]
+    K1[LSM file_open\n(Proactive Block)]
+    K2[LSM task_kill\n(Anti-Tamper)]
+  end
+
+  U2 -->|Populate| M1
+  U2 -->|Populate| M2
+  K1 -->|Lookup| M1
+  K1 -->|Lookup| M2
+  K2 -->|Lookup| M3
+
+  K1 -->|Perf Event| U3
+  K2 -->|Perf Event| U3
+  U1 -->|Attach LSM Hooks| K1
+  U1 -->|Attach LSM Hooks| K2
+```
 
 ## Features
 
-* **Immortal Mode (Anti-Tamper):** Uses **LSM (Linux Security Modules)** hooks (`task_kill`) to prevent the agent from being killed, even by the root user.
-* **Anti-Spoofing (Path Validation):** Detects process masquerading (e.g., malware naming itself `code` or `systemd` but running from `/tmp`). It validates that trusted names only run from immutable system paths.
-* **Zero-Trust (Fileless Detection):** Monitors `sys_enter_memfd_create` to detect and log fileless malware execution attempts residing purely in RAM.
-* **Active Blocking (IPS):** Automatically terminates (SIGKILL) processes attempting to access critical files like `/etc/shadow`.
-* **SIEM-Ready Logging:** Outputs structured, industry-standard JSON logs to `/var/log/kernel-eye.json`, ready for ingestion by Splunk, ELK, or Wazuh.
-* **High Performance:** Powered by eBPF via BCC for minimal system overhead and deep kernel visibility.
+- **Proactive Kernel Blocking:** LSM `file_open` returns `-EPERM` to deny access to protected files in-kernel.
+- **Immortal Mode (Anti-Tamper):** LSM `task_kill` blocks termination attempts against the agent.
+- **Fileless Detection:** `memfd_create` monitoring for memory-only payloads.
+- **SIEM-Ready Logging:** Structured JSON logs at `/var/log/kernel-eye.json`.
+- **Low Overhead:** eBPF + BCC for minimal latency and high visibility.
 
 ## Installation
 
 ### 1. Prerequisites
-* Linux Kernel 5.7+ (Required for LSM / Self-Protection features).
-* BCC (BPF Compiler Collection) tools.
-* Python 3.8+
-* Root privileges.
+- Linux Kernel 5.7+ (Required for LSM hooks)
+- BCC (BPF Compiler Collection)
+- Python 3.8+
+- Root privileges
 
-### **For Fedora/RHEL**
+### For Fedora/RHEL
 ```bash
 sudo dnf install bcc-tools python3-bcc
 ```
 
-### **For Ubuntu/Debian**
+### For Ubuntu/Debian
 ```bash
 sudo apt-get install bpfcc-tools python3-bpfcc
 ```
 
-## 2. Automatic Install (Recommended)
-
-Kernel-Eye uses a standard `Makefile` for deployment, adhering to Linux conventions.
-
+### 2. Automatic Install (Recommended)
 ```bash
 git clone https://github.com/ufukulaserdem/Kernel-Eye.git
 cd Kernel-Eye
 sudo make install
 ```
 
-## 3. Configuration & Monitoring
-Kernel-Eye runs as a systemd service and logs events locally.
+## Configuration & Monitoring
 
-**Check Service Status:**
+**Check Service Status**
 ```bash
 sudo systemctl status kernel-eye
 ```
-**View Live Security Logs:**
+
+**View Live Security Logs**
 ```bash
 tail -f /var/log/kernel-eye.json
 ```
-**Log Format Example:**
-```JSON
-{"timestamp": "2026-02-02T19:30:00", "severity": "CRITICAL", "event_type": "SECURITY_TAMPERING", "action": "BLOCKED", ...}
-```
-## Detection Logic
 
-The following table outlines the **Active Enforcement Rules** applied by the Kernel-Eye agent. Unlike traditional EDRs that only alert, Kernel-Eye actively neutralizes threats in real-time.
+**Log Format Example**
+```json
+{"timestamp": "2026-02-02T19:30:00", "severity": "CRITICAL", "event_type": "SECURITY_TAMPERING", "action": "BLOCKED", "details": "LSM DENY"}
+```
+
+## Detection Logic
 
 | Alert Type | Trigger Condition | Severity | Action |
 | :--- | :--- | :--- | :--- |
-| **CRITICAL** | Unauthorized access to `/etc/shadow`, `/etc/sudoers` or `/root/.ssh` | 🔴 Critical | **SIGKILL (Instant Block)** |
-| **SUSPICIOUS** | Any binary/script executing from volatile paths (`/tmp`, `/dev/shm`) | 🟣 High | **SIGKILL (Prevent Exec)** |
-| **FILELESS** | Interpreters (Python, Node, Perl) creating memory-only files via `memfd_create` | 🟡 High | **SIGKILL (Terminate)** |
-| **ROOT_EXEC** | Unexpected root commands (e.g. `whoami`, `id`) from non-whitelisted processes | 🔵 Info | **Log / Monitor** |
-| **TAMPER** | Attempts to send lethal signals (`SIGKILL`) to the Kernel-Eye agent | 🔴 Critical | **LSM Block (Self-Prot)** |
+| **CRITICAL** | Unauthorized access to `/etc/shadow`, `/etc/sudoers`, `/root/.ssh` | Critical | **LSM Block (-EPERM)** |
+| **SUSPICIOUS** | Executing from volatile paths (`/tmp`, `/dev/shm`) | High | **SIGKILL (User Space)** |
+| **FILELESS** | Interpreters creating memory-only files via `memfd_create` | High | **SIGKILL (User Space)** |
+| **ROOT_EXEC** | Unexpected root commands from non-whitelisted processes | Info | **Log / Monitor** |
+| **TAMPER** | Attempts to send lethal signals to the agent | Critical | **LSM Block (-EPERM)** |
 
 ## Roadmap
 
 ### Completed Capabilities
-- [x] **Real-Time Dashboard:** CLI-based interactive monitoring interface with color-coded alerts.
-- [x] **Context-Aware Whitelisting:** Smart filtering that distinguishes legitimate tools from threats (e.g., allows `python3` but blocks if it executes `memfd_create`).
-- [x] **Active IPS (Intrusion Prevention):** Automatically terminates (SIGKILL) processes accessing protected files or executing from `/tmp`.
-- [x] **Anti-Tamper (Immortal Mode):** Protects the agent from being killed by root users via LSM hooks.
-- [x] **Fileless Defense:** Detects malware executing purely from RAM (memory file descriptors).
-- [x] **SIEM Integration:** JSON Structured Logging.
+- [x] Real-Time Dashboard (CLI monitoring)
+- [x] Context-Aware Whitelisting
+- [x] Active IPS for volatile execution paths
+- [x] Anti-Tamper (LSM `task_kill`)
+- [x] Fileless Defense (`memfd_create`)
+- [x] SIEM Integration (JSON logging)
+- [x] Deep Kernel Blocking (LSM `file_open`)
+- [x] Inode Tracking for Protected Files
 
 ### Future Work & Engineering Goals
-- [ ] **CO-RE Migration (Rust):** Porting the agent to **Rust (Aya)** to remove runtime dependencies (BCC/Clang) and create a single, portable binary (Solving "Dependency Hell").
-- [ ] **Deep Kernel Blocking (LSM):** Moving the enforcement logic entirely to Kernel Space (`-EPERM`) to eliminate **TOCTOU (Time-of-Check Time-of-Use)** race conditions.
-- [ ] **Signature Verification:** Implementing SHA256 hash checks and Inode verification to prevent **"Masquerading"** attacks (where malware mimics valid binary names).
-- [ ] **Network Visibility:** Implementing eBPF `sock_ops` and Traffic Control (TC) filters to detect C2 (Command & Control) beaconing.
-    
+- [ ] CO-RE Migration (Rust/Aya)
+- [ ] Signature Verification (hash + inode validation for binary integrity)
+- [ ] Network Visibility (sock_ops / TC for C2 detection)
+
 ## Contributing
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+Pull requests are welcome. For major changes, please open an issue first to discuss proposed changes.
 
 ## Author & Contact
+
 **Ufuk Ulaş Erdem** - CS Student & System Security Researcher
-* **LinkedIn:** [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
-* **Email:** mainufukulaserdem@gmail.com
-* **Status:** Actively looking for **Summer 2026 Internship** opportunities in Cloud Security, SOC, or Linux System Administration.
+- LinkedIn: [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
+- Email: mainufukulaserdem@gmail.com
+- Status: Actively looking for Summer 2026 Internship opportunities in Cloud Security, SOC, or Linux System Administration
 
 ## License
 
