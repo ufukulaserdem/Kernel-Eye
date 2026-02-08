@@ -20,9 +20,16 @@ jobs:
 
       - name: Start Kernel-Eye Agent
         run: |
-          sudo python3 kernel_eye.py > /tmp/kernel-eye.log 2>&1 &
+          sudo nohup python3 kernel_eye.py > /tmp/kernel-eye.log 2>&1 &
+          echo $! > /tmp/kernel-eye.pid
           sleep 10
+          if ! sudo ps -p $(cat /tmp/kernel-eye.pid) > /dev/null; then
+            echo "Kernel-Eye failed to start. Log output:"
+            sudo tail -n 200 /tmp/kernel-eye.log || true
+            exit 1
+          fi
+          echo "KERNEL_EYE_PID=$(cat /tmp/kernel-eye.pid)" >> $GITHUB_ENV
 
       - name: Run Red Team Tests
         run: |
-          sudo python3 tests/red_team_test.py
+          sudo env KERNEL_EYE_PID=${KERNEL_EYE_PID} python3 tests/red_team_test.py
