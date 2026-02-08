@@ -2,144 +2,157 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
-import subprocess
 import signal
+import subprocess
+import sys
 import time
 
-# UI Colors
-C_RESET   = "\033[0m"
-C_RED     = "\033[91m"
-C_GREEN   = "\033[92m"
-C_YELLOW  = "\033[93m"
-C_BOLD    = "\033[1m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+RESET = "\033[0m"
 
-def get_latest_agent_pid():
-    # Retry logic for CI/CD environments (wait up to 10 seconds)
-    print(f"[*] Searching for Kernel-Eye agent PID...")
-    for _ in range(10):
+
+def print_result(name, passed, detail=""):
+    status = "[PASS]" if passed else "[FAIL]"
+    color = GREEN if passed else RED
+    line = f"{color}{status}{RESET} {name}"
+    if detail:
+        line += f" - {detail}"
+    print(line)
+
+
+def _scan_proc_for_agent():
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
         try:
-            # Find all PIDs for kernel_eye.py
-            pids = subprocess.check_output(["pgrep", "-f", "kernel_eye.py"]).decode().strip().split('\n')
-            
-            # Filter out empty strings and the current test script's PID
-            my_pid = str(os.getpid())
-            valid_pids = [p for p in pids if p and p != my_pid]
-            
-            if valid_pids:
-                # Found it!
-                return int(max(valid_pids, key=int))
-        except:
-            pass
-        
-        # Wait 1 second before retrying
-        time.sleep(1)
-    
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read().decode("utf-8", "ignore").replace("\x00", " ").strip()
+        except Exception:
+            continue
+        if "kernel_eye.py" in cmdline or "kernel-eye" in cmdline:
+            return pid
     return None
 
-def run_tests():
-    print(f"{C_BOLD}--- Kernel-Eye Red Team Verification ---{C_RESET}")
-    
-    agent_pid = get_latest_agent_pid()
-    if not agent_pid:
-        print(f"{C_RED}[!] ERROR: Kernel-Eye agent not found! Please run 'sudo python3 kernel_eye.py' first.{C_RESET}")
-        sys.exit(1)
-    
-    print(f"[*] Targeting Agent PID: {agent_pid}")
+
+def _find_agent_pid_once():
+    env_pid = os.environ.get("KERNEL_EYE_PID")
+    if env_pid and env_pid.isdigit():
+        return int(env_pid)
+
+    for cmd in (
+        ["pgrep", "-f", "kernel_eye.py"],
+        ["pgrep", "-f", "python3 .*kernel_eye.py"],
+        ["pidof", "kernel-eye"],
+    ):
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        except Exception:
+            continue
+        if result.returncode != 0:
+            continue
+        output = result.stdout.strip()
+        if not output:
+            continue
+        for token in output.split():
+            if token.isdigit():
+                return int(token)
+
+    return _scan_proc_for_agent()
+
+
+def find_agent_pid(retries=10, delay_s=1):
+    for _ in range(retries):
+        pid = _find_agent_pid_once()
+        if pid:
+            return pid
+        time.sleep(delay_s)
+    return None
+
+
+def test_shadow_cat():
+    try:
+        result = subprocess.run(["cat", "/etc/shadow"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+    except PermissionError:
+        return True, "EPERM"
+    except Exception as e:
+        return False, f"unexpected error: {type(e).__name__}: {e}"
+
+    if result.returncode != 0:
+        err = (result.stderr or "").lower()
+        if "permission denied" in err or "operation not permitted" in err:
+            return True, "permission denied"
+        return True, f"blocked (rc={result.returncode})"
+
+    return False, "read succeeded"
+
+
+def test_antitamper(pid):
+    if pid is None:
+        return False, "agent PID not found"
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return False, "SIGKILL succeeded"
+    except PermissionError:
+        return True, "EPERM"
+    except ProcessLookupError:
+        return False, "agent PID not running"
+    except Exception as e:
+        return False, f"unexpected error: {type(e).__name__}: {e}"
+
+
+def test_volatile_execution():
+    path = "/tmp/malware.sh"
+    script = "#!/bin/sh\necho MALWARE\n"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(script)
+        os.chmod(path, 0o755)
+
+        try:
+            proc = subprocess.run([path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+            rc = proc.returncode
+            if rc == 0:
+                return False, "process exited normally"
+            if rc < 0:
+                return True, f"killed by signal {-rc}"
+            if rc in (126, 127, 137):
+                return True, f"blocked (rc={rc})"
+            return False, f"unexpected return code {rc}"
+        except PermissionError:
+            return True, "EPERM on exec"
+        except subprocess.TimeoutExpired:
+            return False, "execution timed out"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def main():
     failures = 0
 
-    # ---------------------------------------------------------
-    # TEST 1: Critical File Access (/etc/shadow)
-    # ---------------------------------------------------------
-    print(f"\n[TEST 1] Accessing /etc/shadow using 'cat'...")
-    try:
-        # We use 'cat' because 'python3' is often whitelisted
-        result = subprocess.run(["cat", "/etc/shadow"], capture_output=True, text=True)
-        
-        # Success Criteria:
-        # 1. Return code is NOT 0 (Failed to execute/read)
-        # 2. "Permission denied" or "Operation not permitted" in stderr
-        if result.returncode != 0 or "Permission denied" in result.stderr or "Operation not permitted" in result.stderr:
-            print(f"{C_GREEN}[PASS] Blocked by Kernel (Permission Denied){C_RESET}")
-        else:
-            print(f"{C_RED}[FAIL] Read succeeded! (Are you running as root? Is the Agent active?){C_RESET}")
-            failures += 1
-    except Exception as e:
-        print(f"{C_RED}[FAIL] Execution error: {e}{C_RESET}")
+    agent_pid = find_agent_pid()
+
+    passed, detail = test_shadow_cat()
+    print_result("Test 1: Critical File Access (cat /etc/shadow)", passed, detail)
+    if not passed:
         failures += 1
 
-    # ---------------------------------------------------------
-    # TEST 2: Anti-Tamper (SIGKILL)
-    # ---------------------------------------------------------
-    print(f"\n[TEST 2] Attempting to KILL Agent (PID {agent_pid})...")
-    try:
-        # Attempt to kill
-        os.kill(agent_pid, signal.SIGKILL)
-        
-        # If we are here, os.kill didn't raise PermissionError immediately.
-        # BUT, the agent might still be alive (ignoring the signal).
-        time.sleep(0.5)
-        
-        try:
-            os.kill(agent_pid, 0) # Check if process is still alive
-            # If it's still alive after SIGKILL, Anti-Tamper IS WORKING!
-            print(f"{C_GREEN}[PASS] Process survived SIGKILL (Anti-Tamper Active){C_RESET}")
-        except ProcessLookupError:
-            # It died.
-            print(f"{C_RED}[FAIL] Agent died! Anti-Tamper failed.{C_RESET}")
-            failures += 1
-            
-    except PermissionError:
-        # Kernel blocked the syscall directly
-        print(f"{C_GREEN}[PASS] Syscall Blocked (Operation not permitted){C_RESET}")
-    except Exception as e:
-        print(f"{C_YELLOW}[?] Unexpected error: {e}{C_RESET}")
+    passed, detail = test_antitamper(agent_pid)
+    print_result("Test 2: Anti-Tamper (SIGKILL Agent PID)", passed, detail)
+    if not passed:
         failures += 1
 
-    # ---------------------------------------------------------
-    # TEST 3: Volatile Execution (/tmp)
-    # ---------------------------------------------------------
-    print(f"\n[TEST 3] Executing malicious script in /tmp...")
-    malware_path = "/tmp/malware.sh"
-    try:
-        with open(malware_path, "w") as f:
-            f.write("#!/bin/bash\necho 'I am malware'")
-        os.chmod(malware_path, 0o777)
-        
-        # Use subprocess to run. We expect it to be killed.
-        result = subprocess.run([malware_path], capture_output=True, text=True)
-        
-        # Exit codes for killed processes:
-        # 137 (128 + 9 for SIGKILL)
-        # -9 (Python subprocess representation)
-        if result.returncode == -9 or result.returncode == 137:
-             print(f"{C_GREEN}[PASS] Execution Killed by Agent{C_RESET}")
-        elif "Killed" in result.stderr:
-             print(f"{C_GREEN}[PASS] Execution Blocked/Killed{C_RESET}")
-        else:
-             # Sometimes user-space killing is slow. Let's check logic one more time.
-             # If the file ran but we got no output, maybe it was killed instantly.
-             if not result.stdout.strip():
-                 print(f"{C_GREEN}[PASS] Execution halted (No output produced){C_RESET}")
-             else:
-                 print(f"{C_RED}[FAIL] Script executed! Output: {result.stdout.strip()}{C_RESET}")
-                 failures += 1
-             
-    except Exception as e:
-        print(f"{C_GREEN}[PASS] Execution failed: {e}{C_RESET}")
-    finally:
-        if os.path.exists(malware_path):
-            os.remove(malware_path)
+    passed, detail = test_volatile_execution()
+    print_result("Test 3: Volatile Execution (/tmp)", passed, detail)
+    if not passed:
+        failures += 1
 
-    print("-" * 40)
-    if failures == 0:
-        print(f"{C_GREEN}ALL TESTS PASSED. SYSTEM SECURE.{C_RESET}")
-        sys.exit(0)
-    else:
-        print(f"{C_RED}{failures} TEST(S) FAILED.{C_RESET}")
-        sys.exit(1)
+    return 1 if failures else 0
+
 
 if __name__ == "__main__":
-    if os.geteuid() != 0:
-        print(f"{C_YELLOW}[!] Warning: Run with sudo for accurate results.{C_RESET}")
-    run_tests()
+    sys.exit(main())
