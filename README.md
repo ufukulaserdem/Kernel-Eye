@@ -37,7 +37,7 @@ flowchart TB
   end
 
   subgraph Maps["eBPF Maps (Decision Engine)"]
-    M1["protected_files\n(dev, ino)"]
+    M1["protected_files\n(ino)"]
     M2["whitelist\n(comm)"]
     M3[protected_pid]
   end
