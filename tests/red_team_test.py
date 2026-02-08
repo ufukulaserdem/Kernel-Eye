@@ -15,21 +15,27 @@ C_YELLOW  = "\033[93m"
 C_BOLD    = "\033[1m"
 
 def get_latest_agent_pid():
-    try:
-        # Find all PIDs for kernel_eye.py
-        pids = subprocess.check_output(["pgrep", "-f", "kernel_eye.py"]).decode().strip().split('\n')
-        
-        # Filter out empty strings and the current test script's PID
-        my_pid = str(os.getpid())
-        valid_pids = [p for p in pids if p and p != my_pid]
-        
-        if not valid_pids:
-            return None
+    # Retry logic for CI/CD environments (wait up to 10 seconds)
+    print(f"[*] Searching for Kernel-Eye agent PID...")
+    for _ in range(10):
+        try:
+            # Find all PIDs for kernel_eye.py
+            pids = subprocess.check_output(["pgrep", "-f", "kernel_eye.py"]).decode().strip().split('\n')
             
-        # Get the most recently created process (highest PID usually)
-        return int(max(valid_pids, key=int))
-    except:
-        return None
+            # Filter out empty strings and the current test script's PID
+            my_pid = str(os.getpid())
+            valid_pids = [p for p in pids if p and p != my_pid]
+            
+            if valid_pids:
+                # Found it!
+                return int(max(valid_pids, key=int))
+        except:
+            pass
+        
+        # Wait 1 second before retrying
+        time.sleep(1)
+    
+    return None
 
 def run_tests():
     print(f"{C_BOLD}--- Kernel-Eye Red Team Verification ---{C_RESET}")
