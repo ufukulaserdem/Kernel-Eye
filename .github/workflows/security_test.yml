@@ -18,7 +18,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r) python3-bpfcc
 
+      - name: Preflight LSM Support
+        run: |
+          if ! sudo test -r /sys/kernel/security/lsm; then
+            echo "::warning::LSM list not available. Skipping LSM tests on this runner."
+            echo "SKIP_TESTS=1" >> $GITHUB_ENV
+            exit 0
+          fi
+          if ! sudo cat /sys/kernel/security/lsm | grep -qw bpf; then
+            echo "::warning::BPF LSM not enabled on this kernel. Skipping LSM tests."
+            echo "SKIP_TESTS=1" >> $GITHUB_ENV
+            exit 0
+          fi
+          if ! sudo test -r /sys/kernel/btf/vmlinux; then
+            echo "::warning::BTF not available on this kernel. Skipping LSM tests."
+            echo "SKIP_TESTS=1" >> $GITHUB_ENV
+            exit 0
+          fi
+
       - name: Start Kernel-Eye Agent
+        if: env.SKIP_TESTS != '1'
         run: |
           sudo nohup python3 kernel_eye.py > /tmp/kernel-eye.log 2>&1 &
           echo $! > /tmp/kernel-eye.pid
@@ -31,5 +50,13 @@ jobs:
           echo "KERNEL_EYE_PID=$(cat /tmp/kernel-eye.pid)" >> $GITHUB_ENV
 
       - name: Run Red Team Tests
+        if: env.SKIP_TESTS != '1'
         run: |
           sudo env KERNEL_EYE_PID=${KERNEL_EYE_PID} python3 tests/red_team_test.py
+
+      - name: Upload Kernel-Eye Logs (on failure)
+        if: failure() && env.SKIP_TESTS != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-eye-log
+          path: /tmp/kernel-eye.log
