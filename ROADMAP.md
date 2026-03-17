@@ -1,50 +1,35 @@
-# Kernel-Eye Roadmap: Prototype to Production-Grade EDR
+# Kernel-Eye: Public Roadmap
 
-This roadmap outlines the next three major releases, focusing on portability, detection depth, and enterprise scale. Each phase includes a clear goal and concrete engineering initiatives with implementation strategy.
+**Status:** Active Development
+**Goal:** Transition from a BCC-based conceptual prototype to a robust, CO-RE enabled eBPF agent for Linux endpoints.
 
-## Phase 1: Engineering Maturity (v3.1 – Stability)
+## Phase 1: Foundation & Portability (v0.1.x)
 
-**Goal:** Eliminate dependency fragility, improve portability, and harden delivery.
+_Current Focus_
 
-| Initiative | Objective | Technical Strategy |
-| :--- | :--- | :--- |
-| CO-RE Migration (BCC → libbpf or Aya) | Remove Python/BCC runtime dependencies and eliminate client-side Clang/LLVM requirements. | Replace BCC with libbpf (C) or Aya (Rust) and ship CO-RE-compatible eBPF objects; use BTF data to adapt at runtime across kernel versions, producing a single portable agent binary. |
-| CI/CD + Red Team Regression Tests | Prevent regressions in blocking logic and validate security outcomes pre-release. | Build a pipeline that spins a disposable VM/container, runs the agent, and executes adversarial test cases (e.g., read `/etc/shadow`, kill agent PID, memfd payload) while asserting expected `-EPERM` or block events in telemetry. |
+The immediate goal is to eliminate heavy runtime dependencies and establish a reliable kernel-to-user-space pipeline.
 
-## Phase 2: Network & Advanced Detection (v3.5 – Visibility)
+- **CO-RE Migration:** Deprecate BCC. Rewrite eBPF probes in C using `libbpf` to ensure portability across modern Linux kernels without requiring local LLVM/Clang toolchains.
+- **Telemetry Pipeline:** Implement a stable eBPF Ring Buffer architecture to stream events efficiently to the user-space daemon.
+- **Lifecycle Safety:** Ensure the agent fails gracefully if required eBPF features are unavailable on the host kernel.
 
-**Goal:** Expand visibility and protection beyond file system events into network and memory.
+## Phase 2: Synchronous Enforcement (v0.2.x)
 
-| Initiative | Objective | Technical Strategy |
-| :--- | :--- | :--- |
-| eBPF Socket Enforcement (sock_ops / TC) | Detect and block C2 beaconing, reverse shells, and suspicious outbound flows. | Attach `sock_ops` for connection telemetry and TC/XDP programs for enforcement; enrich events with destination metadata and apply policy thresholds for beaconing intervals, ports, and exfil patterns. |
-| YARA for In-Memory Payloads | Detect fileless malware that bypasses disk visibility. | Introduce a user-space scanning pipeline that consumes memfd/exec telemetry and scans mapped memory regions with YARA rules, emitting high-confidence detections back into the logging pipeline. |
+Moving from passive observation to active, deterministic prevention.
 
-## Phase 3: Enterprise Scale (v4.0 – Fleet Management)
+- **LSM Hook Integration:** Transition enforcement logic from asynchronous user-space reactions (e.g., `SIGKILL`) to synchronous kernel-space blocks using hooks like `bprm_check_security`.
+- **Identity Hardening:** Move beyond easily spoofed `comm` (process name) checks. Enforce policies based on stable identifiers (inode, cgroup, uid).
+- **Anti-Tamper:** Basic self-protection to ensure the user-space daemon cannot be trivially killed by standard unprivileged processes.
 
-**Goal:** Operate thousands of agents with centralized policy and telemetry.
+## Phase 3: Expanded Visibility (v0.3.x)
 
-| Initiative | Objective | Technical Strategy |
-| :--- | :--- | :--- |
-| gRPC Streaming Telemetry | Replace local JSON with reliable, low-latency centralized transport. | Implement a gRPC client that streams structured events to an aggregation service, with backpressure handling, retry logic, and optional local buffering for offline nodes. |
-| Kubernetes DaemonSet Deployment | Enable cloud-native rollout and node-level enforcement at scale. | Package the agent as a DaemonSet with privileged access and host PID namespace; mount BTF and kernel headers as needed and expose per-node health/metrics for cluster observability. |
+Once process execution (`execve`) and file enforcement are stable, expand the detection surface.
 
----
+- **Network Hooks:** Initial visibility into outbound connections using `sock_ops` or TC (Traffic Control) to detect potential C2 beaconing.
+- **Memory Events:** Basic tracking of `memfd_create` and suspicious memory mapping behaviors often used by fileless payloads.
 
-**Versioning Note:** v3.1 focuses on stability and portability, v3.5 broadens detection surface, and v4.0 delivers fleet-grade operations. Each phase is designed to be independently shippable with measurable security outcomes.
+## Long-Term Vision (v1.0)
 
-## Milestones (High-Level)
-
-1. v3.1: CO-RE agent build chain, reproducible releases, automated regression tests.
-2. v3.5: Network visibility and fileless payload detection with measurable detection coverage.
-3. v4.0: Centralized telemetry and Kubernetes-native deployment at fleet scale.
-
-## Risk Register (Concise)
-
-| Risk | Impact | Mitigation |
-| :--- | :--- | :--- |
-| Kernel instability (LSM/eBPF bugs) | System crash or node disruption | Enforce staged rollouts, strict verifier compliance, canary deployments, and a kill-switch policy. |
-| Performance overhead | Latency or throughput regression | Benchmark per hook, implement sampling, and enforce event-rate budgets. |
-| Distro/kernel compatibility | Agent fails to load or behaves inconsistently | CO-RE with BTF, compatibility matrix, and automated cross-distro CI. |
-| Policy false positives | Service disruption due to over-blocking | Maintain allowlists, progressive enforcement modes, and audit-only fallback. |
-| Telemetry loss/backpressure | Missed alerts or incomplete timelines | Buffered queues, retry with exponential backoff, and local spillover logs. |
+- Fully standalone binary release.
+- Comprehensive automated testing matrix.
+- Structured telemetry output (JSON) ready for SIEM ingestion.

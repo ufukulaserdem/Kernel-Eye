@@ -25,52 +25,66 @@ from bcc import BPF
 LOG_FILE_PATH = "/var/log/kernel-eye.json"
 
 # UI Color Definitions
-C_RESET   = "\033[0m"
-C_RED     = "\033[91m"
-C_GREEN   = "\033[92m"
-C_YELLOW  = "\033[93m"
-C_BLUE    = "\033[94m"
+C_RESET = "\033[0m"
+C_RED = "\033[91m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_CYAN    = "\033[96m"
-C_BOLD    = "\033[1m"
+C_CYAN = "\033[96m"
+C_BOLD = "\033[1m"
 
-EVENT_TYPES = {
-    1: "EXEC",
-    2: "FILE",
-    4: "MEMFD",
-    99: "TAMPER"
-}
+EVENT_TYPES = {1: "EXEC", 2: "FILE", 4: "MEMFD", 99: "TAMPER"}
 
 # Critical System Paths (Zero-Trust Policy)
 # REMOVED: /etc/passwd (Must be world-readable for system stability)
-PROTECTED_PATHS = [
-    b"/etc/shadow",
-    b"/etc/sudoers",
-    b"/root/.ssh/authorized_keys"
-]
+PROTECTED_PATHS = [b"/etc/shadow", b"/etc/sudoers", b"/root/.ssh/authorized_keys"]
 PROTECTED_PATHS_STR = [p.decode("utf-8", "ignore") for p in PROTECTED_PATHS]
 
 # --- WHITELIST CONFIGURATION ---
 WHITELIST_PROCESSES = [
     # System Services
-    b"systemd", b"dbus-daemon", b"polkitd", b"rtkit-daemon", b"sshd",
-    b"login", b"sudo", b"kworker", b"unix_chkpwd",
-    b"systemd-userwor", b"systemd-userwork", b"(sd-worker)",
-    b"accounts-daemon", b"quota",
-
+    b"systemd",
+    b"dbus-daemon",
+    b"polkitd",
+    b"rtkit-daemon",
+    b"sshd",
+    b"login",
+    b"sudo",
+    b"kworker",
+    b"unix_chkpwd",
+    b"systemd-userwor",
+    b"systemd-userwork",
+    b"(sd-worker)",
+    b"accounts-daemon",
+    b"quota",
     # Desktop Integration (Prevents browser/GUI crashes)
-    b"xdg-desktop-por", b"xdg-desktop-portal", b"flatpak",
-    b"gnome-shell", b"plasmashell", b"kwin_wayland", b"Xorg",
-
+    b"xdg-desktop-por",
+    b"xdg-desktop-portal",
+    b"flatpak",
+    b"gnome-shell",
+    b"plasmashell",
+    b"kwin_wayland",
+    b"Xorg",
     # Audio & Multimedia
-    b"pipewire", b"pipewire-pulse", b"wireplumber", b"spotify",
-
+    b"pipewire",
+    b"pipewire-pulse",
+    b"wireplumber",
+    b"spotify",
     # Development Tools & Browsers
-    b"code", b"zen", b"ghostty", b"chrome", b"firefox", b"brave",
+    b"code",
+    b"zen",
+    b"ghostty",
+    b"chrome",
+    b"firefox",
+    b"brave",
     b"git",
-
     # Interpreters
-    b"bash", b"zsh", b"sh", b"python3", b"node"
+    b"bash",
+    b"zsh",
+    b"sh",
+    b"python3",
+    b"node",
 ]
 WHITELIST_NAMES = {p.decode("utf-8", "ignore")[:15] for p in WHITELIST_PROCESSES}
 
@@ -85,6 +99,7 @@ class CommKey(ctypes.Structure):
     _fields_ = [
         ("comm", ctypes.c_char * 16),
     ]
+
 
 # ==============================================================================
 # eBPF KERNEL PROGRAM (C SOURCE)
@@ -240,6 +255,7 @@ LSM_PROBE(task_kill, struct task_struct *p, struct kernel_siginfo *info, int sig
 # AGENT LOGIC
 # ==============================================================================
 
+
 class KernelEyeAgent:
     def __init__(self):
         self.bpf = None
@@ -250,7 +266,7 @@ class KernelEyeAgent:
         self._init_bpf()
 
     def _clear_screen(self):
-        os.system('cls' if os.name == 'nt' else 'clear')
+        os.system("cls" if os.name == "nt" else "clear")
 
     def _check_root(self):
         if os.geteuid() != 0:
@@ -262,19 +278,30 @@ class KernelEyeAgent:
             print(f"{C_BLUE}[*] Loading eBPF probes...{C_RESET}")
             self.bpf = BPF(text=BPF_PROGRAM_SOURCE)
 
-            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("execve"), fn_name="syscall__execve")
-            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("openat"), fn_name="syscall__openat")
-            self.bpf.attach_kprobe(event=self.bpf.get_syscall_fnname("memfd_create"), fn_name="syscall__memfd_create")
+            self.bpf.attach_kprobe(
+                event=self.bpf.get_syscall_fnname("execve"), fn_name="syscall__execve"
+            )
+            self.bpf.attach_kprobe(
+                event=self.bpf.get_syscall_fnname("openat"), fn_name="syscall__openat"
+            )
+            self.bpf.attach_kprobe(
+                event=self.bpf.get_syscall_fnname("memfd_create"),
+                fn_name="syscall__memfd_create",
+            )
             try:
                 self.bpf.attach_lsm(fn_name="file_open")
                 self.bpf.attach_lsm(fn_name="task_kill")
             except Exception as e:
-                print(f"{C_YELLOW}[!] Warning: LSM hooks not attached ({e}). Kernel 5.7+ required.{C_RESET}")
+                print(
+                    f"{C_YELLOW}[!] Warning: LSM hooks not attached ({e}). Kernel 5.7+ required.{C_RESET}"
+                )
             self._load_policy_maps()
 
             my_pid = os.getpid()
             self.bpf["protected_pid"][ctypes.c_int(0)] = ctypes.c_uint32(my_pid)
-            print(f"{C_GREEN}[+] Anti-Tamper Protection: Active (PID: {my_pid}){C_RESET}")
+            print(
+                f"{C_GREEN}[+] Anti-Tamper Protection: Active (PID: {my_pid}){C_RESET}"
+            )
 
         except Exception as e:
             print(f"{C_RED}[-] Critical Error: {e}{C_RESET}")
@@ -295,7 +322,9 @@ class KernelEyeAgent:
             try:
                 stat_info = os.stat(path, follow_symlinks=True)
             except FileNotFoundError:
-                print(f"{C_YELLOW}[!] Warning: Protected file not found: {path}{C_RESET}")
+                print(
+                    f"{C_YELLOW}[!] Warning: Protected file not found: {path}{C_RESET}"
+                )
                 continue
             except Exception as e:
                 print(f"{C_YELLOW}[!] Warning: Could not stat {path}: {e}{C_RESET}")
@@ -304,34 +333,40 @@ class KernelEyeAgent:
             key = FileId(stat_info.st_ino)
             protected_map[key] = ctypes.c_ubyte(1)
             self.protected_file_ids[int(stat_info.st_ino)] = path
-            print(f"{C_CYAN}[DEBUG] Protecting {path} -> Inode: {int(stat_info.st_ino)}{C_RESET}")
+            print(
+                f"{C_CYAN}[DEBUG] Protecting {path} -> Inode: {int(stat_info.st_ino)}{C_RESET}"
+            )
 
     def log_event(self, event_data):
-            try:
-                with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-                    json.dump(event_data, f)
-                    f.write("\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-            except Exception as e:
-                print(f"{C_RED}[!] LOG ERROR: Could not write to JSON: {e}{C_RESET}")
+        try:
+            with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+                json.dump(event_data, f)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            print(f"{C_RED}[!] LOG ERROR: Could not write to JSON: {e}{C_RESET}")
 
     def print_dashboard_row(self, alert_type, pid, process, details, color):
-        print(f"{color}{alert_type:<12} | {pid:<6} | {process:<15} | {details}{C_RESET}")
+        print(
+            f"{color}{alert_type:<12} | {pid:<6} | {process:<15} | {details}{C_RESET}"
+        )
 
     def enforce_policy(self, cpu, data, size):
         event = self.bpf["events"].event(data)
 
         try:
-            comm = event.comm.decode('utf-8', 'ignore').rstrip("\x00").strip()
-            filename = event.filename.decode('utf-8', 'ignore').rstrip("\x00").strip()
+            comm = event.comm.decode("utf-8", "ignore").rstrip("\x00").strip()
+            filename = event.filename.decode("utf-8", "ignore").rstrip("\x00").strip()
         except:
             return
 
         # 1. TAMPER CHECK
         if event.type == 99:
-             self.print_dashboard_row("TAMPER", event.pid, comm, "KILL ATTEMPT [BLOCKED]", C_RED + C_BOLD)
-             return
+            self.print_dashboard_row(
+                "TAMPER", event.pid, comm, "KILL ATTEMPT [BLOCKED]", C_RED + C_BOLD
+            )
+            return
 
         # 2. KERNEL-LEVEL FILE BLOCK (LSM)
         if event.type == 2 and getattr(event, "blocked", 0) == 1:
@@ -349,7 +384,7 @@ class KernelEyeAgent:
                 "target": filename,
                 "event_type": event_name,
                 "severity": "CRITICAL",
-                "action": "BLOCKED"
+                "action": "BLOCKED",
             }
 
             self.print_dashboard_row(
@@ -357,7 +392,7 @@ class KernelEyeAgent:
                 event.pid,
                 comm,
                 f"ACCESS DENIED: {filename} [LSM BLOCK]",
-                C_RED + C_BOLD
+                C_RED + C_BOLD,
             )
             self.log_event(log_entry)
             return
@@ -387,7 +422,19 @@ class KernelEyeAgent:
 
         # Noise Filter
         if event.type == 4 and not should_kill:
-            if any(x in filename for x in ["pulseaudio", "shm", "gdk", "mozilla", "xshm", "memfd:", "render", "wayland"]):
+            if any(
+                x in filename
+                for x in [
+                    "pulseaudio",
+                    "shm",
+                    "gdk",
+                    "mozilla",
+                    "xshm",
+                    "memfd:",
+                    "render",
+                    "wayland",
+                ]
+            ):
                 return
 
         event_name = EVENT_TYPES.get(event.type, "UNK")
@@ -399,7 +446,7 @@ class KernelEyeAgent:
             "target": filename,
             "event_type": event_name,
             "severity": "LOW",
-            "action": "MONITOR"
+            "action": "MONITOR",
         }
 
         # --- ENFORCEMENT ---
@@ -414,21 +461,39 @@ class KernelEyeAgent:
                 pass
 
             if event.type == 4:
-                 self.print_dashboard_row("FILELESS", event.pid, comm, f"MEMFD BLOCKED: {filename} [KILL]", C_YELLOW + C_BOLD)
+                self.print_dashboard_row(
+                    "FILELESS",
+                    event.pid,
+                    comm,
+                    f"MEMFD BLOCKED: {filename} [KILL]",
+                    C_YELLOW + C_BOLD,
+                )
             else:
-                 self.print_dashboard_row("SUSPICIOUS", event.pid, comm, f"EXEC BLOCKED: {filename} [KILL]", C_MAGENTA + C_BOLD)
+                self.print_dashboard_row(
+                    "SUSPICIOUS",
+                    event.pid,
+                    comm,
+                    f"EXEC BLOCKED: {filename} [KILL]",
+                    C_MAGENTA + C_BOLD,
+                )
 
             self.log_event(log_entry)
 
         elif event.type == 1 and event.uid == 0:
-             self.print_dashboard_row("ROOT EXEC", event.pid, comm, f"CMD: {filename}", C_CYAN)
+            self.print_dashboard_row(
+                "ROOT EXEC", event.pid, comm, f"CMD: {filename}", C_CYAN
+            )
 
     def run(self):
         self.running = True
         print(f"{C_GREEN}[+] Kernel-Eye is Active.{C_RESET}")
-        print(f"{C_CYAN}[*] IPS: Enabled | Anti-Tamper: Enabled | Logging: JSON{C_RESET}")
+        print(
+            f"{C_CYAN}[*] IPS: Enabled | Anti-Tamper: Enabled | Logging: JSON{C_RESET}"
+        )
         print("-" * 95)
-        print(f"{C_BOLD}{'ALERT TYPE':<12} | {'PID':<6} | {'PROCESS':<15} | {'DETAILS'}{C_RESET}")
+        print(
+            f"{C_BOLD}{'ALERT TYPE':<12} | {'PID':<6} | {'PROCESS':<15} | {'DETAILS'}{C_RESET}"
+        )
         print("-" * 95)
 
         self.bpf["events"].open_perf_buffer(self.enforce_policy)
@@ -438,6 +503,7 @@ class KernelEyeAgent:
         except KeyboardInterrupt:
             print(f"\n{C_RED}[*] Stopping Kernel-Eye Agent...{C_RESET}")
             sys.exit(0)
+
 
 if __name__ == "__main__":
     KernelEyeAgent().run()

@@ -23,3 +23,7 @@ Thumbs.db
 # Virtual Environment
 venv/
 env/
+
+# Private planning documents
+PRODUCTION_READINESS_PLAN.md
+.obsidian/
