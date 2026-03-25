@@ -105,4 +105,6 @@ RUST_LOG=info sudo -E cargo run -- --ebpf-bpf kernel-eye-ebpf
 
 ## License
 
-MIT
+This project is multi-licensed to comply with eBPF ecosystem standards:
+* **User-Space Control Plane:** Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+* **eBPF Kernel Programs:** Licensed under [GPL-2.0](LICENSE-GPL2) to comply with Linux kernel helper restrictions.
