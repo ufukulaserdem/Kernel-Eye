@@ -1,29 +1,4 @@
-# Python artifacts
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Logs
-*.log
-*.json
-
-# System specific files
-.DS_Store
-.directory
-Thumbs.db
-
-# IDE specific files
+target/
 .vscode/
 .idea/
-
-# Swap files (Vim/Nano)
-*.swp
-*~
-
-# Virtual Environment
-venv/
-env/
-
-# Private planning documents
-PRODUCTION_READINESS_PLAN.md
-.obsidian/
+*.rs.bk

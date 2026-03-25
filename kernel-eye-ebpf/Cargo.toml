@@ -1,0 +1,16 @@
+[package]
+name = "kernel-eye-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+kernel-eye-common = { path = "../kernel-eye-common" }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "kernel-eye"
+path = "src/main.rs"
