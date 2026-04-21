@@ -4,104 +4,140 @@
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
 ![Security](https://img.shields.io/badge/Security-eBPF-red?style=for-the-badge)
 
-**Kernel-Eye** is a Linux Endpoint Detection and Response (EDR) project that uses `no_std` Rust, eBPF, and LSM hooks for kernel-level policy enforcement and high-throughput telemetry.
+**Kernel-Eye** is a Linux Endpoint Detection and Response (EDR) agent built with `no_std` Rust, eBPF, and LSM hooks. It provides kernel-level policy enforcement, anti-tamper self-protection, and high-throughput SIEM-ready telemetry — all without kernel modules.
 
-## Project Status
+## Core Capabilities
 
-**Current State:** Active Migration to Rust/Aya.
-Kernel-Eye has moved away from legacy BCC/Python to a **Rust-based CO-RE (Compile Once, Run Everywhere)** architecture. This eliminates the need for LLVM/Clang on target hosts and guarantees memory safety in the user-space control plane.
+| Hook | Function | Mechanism | Status |
+| :--- | :--- | :--- | :--- |
+| `file_open` | Block unauthorized access to sensitive files (`/etc/shadow`, `/etc/sudoers`, `/root/.ssh/*`) | LSM deny (`-EPERM`) with inode-based lookup | ✅ Implemented |
+| `task_kill` | Prevent external processes from killing the agent | LSM deny (`-EPERM`) via TGID comparison | ✅ Implemented |
+| `task_free` | Process exit telemetry & whitelist garbage collection | Ring Buffer event stream | ✅ Implemented |
 
-**Target Capabilities:**
-- Deterministic LSM-based blocking for protected file access (file_open).
-- Synchronous anti-tamper behavior for kill attempts against the agent (task_kill).
-- Async Ring Buffer telemetry for volatile execution and fileless patterns (memfd_create).
+## Architecture
 
-## Core Architecture
+Kernel-Eye uses a **split-architecture** model with three Rust crates:
 
-Kernel-Eye relies on a split-architecture model:
-- **Kernel-Space (kernel-eye-ebpf):** Sync LSM blocking (-EPERM) via `no_std` Rust.
-- **User-Space (kernel-eye):** Async Rust daemon (Tokio) handling map updates, Ring Buffer telemetry, and SIEM-ready JSON logging.
-- **Shared Data (kernel-eye-common):** `#[repr(C)]` aligned structs bridging the kernel and control plane.
+- **`kernel-eye-ebpf`** — `#![no_std]` eBPF programs compiled to BPF bytecode. Contains the LSM hook implementations and all kernel-side decision logic.
+- **`kernel-eye`** — Async Rust daemon (Tokio) that loads the eBPF programs, populates policy maps, and streams telemetry from the Ring Buffer as structured JSON.
+- **`kernel-eye-common`** — `#[repr(C)]` aligned data structures shared between kernel and user space.
 
-## Architecture Diagram
 ```mermaid
 flowchart TB
-  subgraph UserSpace["User Space (Rust Async Control Plane)"]
-    U1[Kernel-Eye Daemon]
-    U2[Tokio Policy Manager]
-    U3[SIEM/JSON Logger]
+  subgraph UserSpace["User Space (Async Tokio Daemon)"]
+    U1[Kernel-Eye Agent]
+    U2[Map Populator]
+    U3[JSON Telemetry Logger]
   end
 
   subgraph Maps["eBPF Maps (O(1) Decision Engine)"]
-    M1["protected_files\n(Hash Map)"]
-    M2["whitelist\n(Hash Map)"]
+    M1["PROTECTED_INODES\n(HashMap<u64, u8>)"]
+    M2["WHITELIST_PIDS\n(HashMap<u32, u8>)"]
+    M3["AGENT_TGID\n(Array<u32>)"]
   end
 
-  subgraph Kernel["Kernel Space (Aya/LSM Enforcement)"]
-    K1["LSM file_open\n(Proactive Block)"]
+  subgraph Kernel["Kernel Space (LSM Enforcement)"]
+    K1["LSM file_open\n(Block -EPERM)"]
     K2["LSM task_kill\n(Anti-Tamper)"]
-    R1["eBPF Ring Buffer"]
+    K3["LSM task_free\n(Telemetry)"]
+    R1["Ring Buffer\n(256 KB)"]
   end
 
-  U2 -->|Pin & Populate| M1
-  U2 -->|Pin & Populate| M2
+  U2 -->|"stat() → inode"| M1
+  U2 -->|"Agent PID"| M2
+  U2 -->|"Agent TGID"| M3
+
   K1 -->|Lookup| M1
   K1 -->|Lookup| M2
+  K2 -->|Lookup| M3
 
-  K1 -->|Async Stream| R1
-  K2 -->|Async Stream| R1
+  K1 -->|Event| R1
+  K2 -->|Event| R1
+  K3 -->|Event| R1
   R1 -->|Poll| U1
   U1 -->|Format| U3
-  
+
   U1 -.->|Attach| K1
   U1 -.->|Attach| K2
+  U1 -.->|Attach| K3
 ```
+
 ## Detection Logic
 
-| Alert Type     | Trigger Condition                                                  | Severity | Action                   |
-| :------------- | :----------------------------------------------------------------- | :------- | :----------------------- |
-| **CRITICAL** | Unauthorized access to /etc/shadow, /etc/sudoers, /root/.ssh | Critical | **LSM Block (-EPERM)** |
-| **SUSPICIOUS** | Executing from volatile paths (/tmp, /dev/shm)                 | High     | **Ring Buffer Alert** |
-| **FILELESS** | Interpreters creating memory-only files via memfd_create         | High     | **Ring Buffer Alert** |
-| **TAMPER** | Attempts to send lethal signals to the agent                       | Critical | **LSM Block (-EPERM)** |
+| Alert Type | Trigger Condition | Severity | Action |
+| :--- | :--- | :--- | :--- |
+| **FILE_ACCESS** | Unauthorized `open()` on protected files (`/etc/shadow`, etc.) | CRITICAL | **LSM Block (-EPERM)** |
+| **SECURITY_TAMPERING** | External process sends kill signal to agent PID | CRITICAL | **LSM Block (-EPERM)** |
+| **PROCESS_EXIT** | Any process exits (task_free) | INFO | **Ring Buffer Telemetry** |
 
 ## Prerequisites
 
-- Linux Kernel 5.8+ (Required for Ring Buffers and LSM BPF)
-- Rust Nightly Toolchain
-- bpf-linker
+- **Linux Kernel 5.8+** (required for Ring Buffers and LSM BPF)
+- **BTF enabled** (`CONFIG_DEBUG_INFO_BTF=y`) — check: `ls /sys/kernel/btf/vmlinux`
+- **LSM BPF enabled** — check: `cat /sys/kernel/security/lsm` should include `bpf`
+- **Rust Nightly Toolchain** + `bpf-linker`
+
 ```bash
 rustup toolchain install nightly --component rust-src
 cargo install bpf-linker
 ```
+
 ## Build & Run
+
+**1. Generate kernel struct bindings (first time / after kernel update):**
 ```bash
-**1. Compile the eBPF object:**
-cargo xtask build-ebpf
+cargo xtask
 ```
-**2. Run the User-Space Agent (Root required):**
+
+**2. Build the project:**
 ```bash
-RUST_LOG=info sudo -E cargo run -- --ebpf-bpf kernel-eye-ebpf
+cargo build
 ```
-## Log Format Example (Target)
+
+**3. Run the agent (root required for eBPF):**
+```bash
+RUST_LOG=info sudo -E ./target/debug/kernel-eye
+```
+
+## Log Output (SIEM-Ready JSON)
+
 ```json
-{
-  "timestamp": "2026-03-25T12:43:35Z",
-  "severity": "CRITICAL",
-  "event_type": "SECURITY_TAMPERING",
-  "action": "BLOCKED",
-  "details": "LSM DENY on task_kill",
-  "pid": 4512,
-  "comm": "malware_bin"
-}
+{"severity":"CRITICAL","event_type":"FILE_ACCESS","action":"BLOCKED","pid":4512,"tgid":4512,"uid":1000,"ino":1835022,"comm":"cat","label":"file_open:BLOCKED"}
+{"severity":"CRITICAL","event_type":"SECURITY_TAMPERING","action":"BLOCKED","pid":5001,"tgid":5001,"uid":1000,"ino":0,"comm":"kill","label":"task_kill:BLOCKED"}
+{"severity":"INFO","event_type":"PROCESS_EXIT","action":"MONITOR","pid":4512,"tgid":4512,"uid":1000,"ino":0,"comm":"cat","label":"task_free"}
 ```
+
+## Project Structure
+
+```
+Kernel-Eye/
+├── kernel-eye/              # User-space async daemon
+│   ├── src/main.rs          # Tokio event loop, map population, JSON logging
+│   └── build.rs             # eBPF compilation via aya-build
+├── kernel-eye-ebpf/         # Kernel-space eBPF programs (no_std)
+│   ├── src/main.rs          # LSM hooks: file_open, task_kill, task_free
+│   └── src/bindings.rs      # Auto-generated kernel struct bindings
+├── kernel-eye-common/       # Shared #[repr(C)] types
+│   └── src/lib.rs           # EventData, constants
+└── xtask/                   # Build tooling (BTF binding generation)
+    └── src/main.rs
+```
+
+## Roadmap
+
+- [ ] `memfd_create` tracepoint for fileless malware detection
+- [ ] TOML-based configuration for protected paths and whitelist
+- [ ] `serde_json` for proper JSON serialization
+- [ ] Network socket monitoring via `socket_connect` LSM hook
+- [ ] Integration tests with automated eBPF loading
+- [ ] CI pipeline with kernel-enabled runner
+
 ## Author & Contact
 
 **Ufuk Ulaş Erdem** - 3rd-year CS Student & System Security Researcher
 
 - LinkedIn: [Ufuk Ulaş Erdem](https://www.linkedin.com/in/ufukulaserdem)
 - Email: mainufukulaserdem@gmail.com
-- Status: Actively looking for Summer 2026 Internship opportunities in Cloud Security, SOC, or Linux System Administration.
 
 ## License
 
