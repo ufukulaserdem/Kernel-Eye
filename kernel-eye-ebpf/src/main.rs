@@ -7,9 +7,7 @@ use aya_ebpf::{
     maps::{Array, HashMap, RingBuf},
     programs::LsmContext,
 };
-use kernel_eye_common::{
-    ACTION_BLOCKED, ACTION_MONITOR, EPERM, EVENT_FILE, EVENT_PROCESS_EXIT, EVENT_TAMPER, EventData,
-};
+use kernel_eye_common::{ACTION_BLOCKED, EPERM, EVENT_FILE, EVENT_TAMPER, EventData};
 
 #[allow(warnings)]
 mod bindings;
@@ -148,7 +146,10 @@ fn try_task_kill(ctx: LsmContext) -> Result<i32, i32> {
     }
     let target_tgid = unsafe { (*target).tgid as u32 };
 
-    // 3. If someone is trying to kill the agent → block.
+    // 3. Extract the SIGNAL NUMBER from arg 2
+    let sig: i32 = ctx.arg(2);
+
+    // 4. If someone is trying to kill the agent → block.
     if target_tgid == agent_tgid {
         // Don't block ourselves (the agent) from cleaning up its own threads.
         let caller_tgid = bpf_get_current_pid_tgid() as u32;
@@ -156,8 +157,11 @@ fn try_task_kill(ctx: LsmContext) -> Result<i32, i32> {
             return Ok(0);
         }
 
-        emit_event(EVENT_TAMPER, ACTION_BLOCKED, 0, b"task_kill:BLOCKED\0");
-        return Ok(EPERM);
+        if sig == 9 || sig == 15 {
+            emit_event(EVENT_TAMPER, ACTION_BLOCKED, 0, b"task_kill:BLOCKED\0");
+            return Ok(EPERM);
+        }
+        return Ok(0);
     }
 
     Ok(0)
@@ -183,7 +187,7 @@ fn try_task_free(ctx: LsmContext) -> Result<i32, i32> {
     let _ = WHITELIST_PIDS.remove(&tgid);
 
     // Emit a lightweight process-exit event.
-    emit_event(EVENT_PROCESS_EXIT, ACTION_MONITOR, 0, b"task_free\0");
+    //emit_event(EVENT_PROCESS_EXIT, ACTION_MONITOR, 0, b"task_free\0");
 
     Ok(0) // task_free must always return 0 (void hook).
 }

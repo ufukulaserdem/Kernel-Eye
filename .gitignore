@@ -6,3 +6,4 @@ target/
 # Machine-generated BTF bindings (regenerate via: cargo xtask)
 kernel-eye-ebpf/src/bindings.rs
 kernel-eye-ebpf/src/vmlinux.h
+.aider*

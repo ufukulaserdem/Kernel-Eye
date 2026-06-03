@@ -12,7 +12,7 @@
 | :--- | :--- | :--- | :--- |
 | `file_open` | Block unauthorized access to sensitive files (`/etc/shadow`, `/etc/sudoers`, `/root/.ssh/*`) | LSM deny (`-EPERM`) with inode-based lookup | ✅ Implemented |
 | `task_kill` | Prevent external processes from killing the agent | LSM deny (`-EPERM`) via TGID comparison | ✅ Implemented |
-| `task_free` | Process exit telemetry & whitelist garbage collection | Ring Buffer event stream | ✅ Implemented |
+| `task_free` | Process exit telemetry & whitelist garbage collection | Ring Buffer event stream | ✅ Implemented (Disabled by default to reduce log noise) |
 
 ## Architecture
 
@@ -68,7 +68,7 @@ flowchart TB
 | :--- | :--- | :--- | :--- |
 | **FILE_ACCESS** | Unauthorized `open()` on protected files (`/etc/shadow`, etc.) | CRITICAL | **LSM Block (-EPERM)** |
 | **SECURITY_TAMPERING** | External process sends kill signal to agent PID | CRITICAL | **LSM Block (-EPERM)** |
-| **PROCESS_EXIT** | Any process exits (task_free) | INFO | **Ring Buffer Telemetry** |
+| **PROCESS_EXIT** | Any process exits (task_free) | INFO | **Ring Buffer Telemetry** *(Disabled by default)* |
 
 ## Prerequisites
 
