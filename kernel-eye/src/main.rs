@@ -101,6 +101,21 @@ async fn main() -> Result<()> {
         info!("✓ LSM task_kill attached");
     }
 
+    // ── Attach LSM: ptrace_access_check ─────────────────────────────
+    {
+        let prog = bpf
+            .program_mut("ptrace_access_check_hook")
+            .context("finding ptrace_access_check_hook program")?;
+        let prog: &mut Lsm = prog
+            .try_into()
+            .map_err(|e: ProgramError| anyhow::anyhow!(e))
+            .context("casting ptrace_access_check_hook to LSM")?;
+        prog.load("ptrace_access_check", &btf)
+            .context("loading ptrace_access_check LSM")?;
+        prog.attach().context("attaching ptrace_access_check LSM")?;
+        info!("✓ LSM ptrace_access_check attached");
+    }
+
     // ── Attach LSM: task_free ───────────────────────────────────────
     {
         let prog = bpf
@@ -171,7 +186,7 @@ async fn main() -> Result<()> {
     .context("creating ring buffer reader")?;
 
     info!("══════════════════════════════════════════════════════");
-    info!("  Kernel-Eye: Active — {} LSM hooks armed", 3);
+    info!("  Kernel-Eye: Active — {} LSM hooks armed", 4);
     info!("  Protected files: {}", PROTECTED_PATHS.len());
     info!("  Agent PID: {} (tamper-protected)", my_pid);
     info!("══════════════════════════════════════════════════════");

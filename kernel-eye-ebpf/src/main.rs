@@ -163,6 +163,51 @@ fn try_task_kill(ctx: LsmContext) -> Result<i32, i32> {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  LSM HOOK: ptrace_access_check — Prevent ptrace on the agent
+// ═══════════════════════════════════════════════════════════════════
+//
+//  Signature: int security_ptrace_access_check(struct task_struct *child, unsigned int mode)
+//
+//  Decision logic:
+//    1. Read the agent TGID.
+//    2. If the child (task being traced) has the agent TGID and the
+//       caller is NOT the agent itself → DENY (-EPERM).
+//    3. Otherwise → allow.
+
+#[lsm(hook = "ptrace_access_check")]
+pub fn ptrace_access_check_hook(ctx: LsmContext) -> i32 {
+    match try_ptrace_access(ctx) {
+        Ok(ret) => ret,
+        Err(_) => 0,
+    }
+}
+
+fn try_ptrace_access(ctx: LsmContext) -> Result<i32, i32> {
+    let agent_tgid = match AGENT_TGID.get(0) {
+        Some(v) => *v,
+        None => return Ok(0),
+    };
+    if agent_tgid == 0 {
+        return Ok(0);
+    }
+
+    let child: *const task_struct = ctx.arg(0);
+    if child.is_null() {
+        return Ok(0);
+    }
+    let child_tgid = unsafe { (*child).tgid as u32 };
+    if child_tgid == agent_tgid {
+        let caller_tgid = bpf_get_current_pid_tgid() as u32;
+        if caller_tgid == agent_tgid {
+            return Ok(0);
+        }
+        emit_event(EVENT_TAMPER, ACTION_BLOCKED, 0, b"ptrace_access:BLOCKED\0");
+        return Ok(EPERM);
+    }
+    Ok(0)
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  LSM HOOK: task_free — Process exit telemetry / GC
 // ═══════════════════════════════════════════════════════════════════
 
